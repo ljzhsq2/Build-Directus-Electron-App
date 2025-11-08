@@ -9,8 +9,16 @@
 
 此 GitHub Action 使用 **两阶段构建**：
 
-1. **阶段 1（Ubuntu）**：从 Docker 镜像提取 Directus 文件
-2. **阶段 2（Windows）**：使用 Electron 打包成 Windows exe
+1. **阶段 1（Ubuntu）**：
+   - 从 Docker 镜像提取 Directus 文件
+   - **自动解决符号链接问题**（Windows 不支持符号链接）
+   - 使用 `--dereference` 标志将符号链接转换为实际文件
+   - 打包成 tar.gz 传递给下一阶段
+
+2. **阶段 2（Windows）**：
+   - 下载处理好的 Directus 文件
+   - 使用 Electron 打包成 Windows exe
+   - 自动发布到 GitHub Releases
 
 这样可以正确使用 Linux Docker 容器，同时生成 Windows 可执行文件
 
@@ -44,7 +52,7 @@ your-repo/
 
 将一个 256x256 的 `.ico` 图标文件放在仓库根目录，命名为 `icon.ico`
 
-### 3. 触发构建
+### 4. 触发构建
 
 有两种方式触发构建：
 
@@ -136,6 +144,11 @@ DB_PASSWORD: 'password'
 ## 🐛 故障排查
 
 ### 构建失败
+
+**问题**：`Resource not accessible by integration` 错误
+- ✅ 已在 workflow 添加 `permissions: contents: write`
+- 如果还是报错，按照上面"设置步骤 → 2. 配置仓库权限"操作
+- 确保仓库的 Actions 有写入权限
 
 **问题**：阶段 1 失败（Ubuntu）
 - 检查 Docker 镜像版本是否正确
