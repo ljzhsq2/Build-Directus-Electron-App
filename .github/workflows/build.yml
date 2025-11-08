@@ -145,8 +145,7 @@ jobs:
                 "!directus-app/node_modules/.bin"
               ],
               "asarUnpack": [
-                "directus-app/**/*.node",
-                "directus-app/node_modules/better-sqlite3/**/*"
+                "directus-app/**/*"
               ],
               "directories": {
                 "output": "dist"
