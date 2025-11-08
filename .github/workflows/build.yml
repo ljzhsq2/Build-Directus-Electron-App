@@ -30,6 +30,13 @@ jobs:
           docker cp directus-temp:/directus ./directus-files
           docker rm directus-temp
           
+          echo "=== Extracted Directus directory structure ==="
+          ls -la directus-files/
+          echo ""
+          echo "=== Looking for CLI entry points ==="
+          find directus-files -name "cli.js" -o -name "index.js" | head -20
+          echo ""
+          
           # 解决符号链接问题：将符号链接转换为实际文件
           echo "Resolving symlinks..."
           cd directus-files
@@ -186,9 +193,6 @@ jobs:
 
           function startDirectus() {
             const directusAppPath = getDirectusPath();
-            const nodeModulesPath = path.join(directusAppPath, 'node_modules');
-            const directusBin = path.join(nodeModulesPath, '.bin', 'directus.cmd');
-            const directusJs = path.join(nodeModulesPath, 'directus', 'dist', 'cli', 'index.js');
             const userDataPath = app.getPath('userData');
             const dbPath = path.join(userDataPath, 'database', 'directus.db');
             const logPath = path.join(userDataPath, 'directus.log');
@@ -206,7 +210,6 @@ jobs:
             
             log('=== Directus 启动开始 ===');
             log(`App path: ${directusAppPath}`);
-            log(`Node modules: ${nodeModulesPath}`);
             log(`Database path: ${dbPath}`);
             log(`Log path: ${logPath}`);
             
@@ -217,13 +220,39 @@ jobs:
               log(`Created database directory: ${dbDir}`);
             }
             
-            // 检查关键文件
-            if (!fs.existsSync(directusJs)) {
-              log(`ERROR: Directus CLI not found at: ${directusJs}`);
-              showErrorDialog('找不到 Directus CLI 文件！', `路径: ${directusJs}`);
+            // Docker 镜像中的 Directus 可能在不同位置
+            // 查找可能的 CLI 入口点
+            const possiblePaths = [
+              path.join(directusAppPath, 'cli.js'),           // Docker 镜像可能的位置
+              path.join(directusAppPath, 'dist', 'cli.js'),
+              path.join(directusAppPath, 'dist', 'index.js'),
+              path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
+              path.join(directusAppPath, 'node_modules', '.bin', 'directus'),
+            ];
+            
+            let directusCliPath = null;
+            for (const p of possiblePaths) {
+              log(`Checking: ${p}`);
+              if (fs.existsSync(p)) {
+                directusCliPath = p;
+                log(`✓ Found Directus CLI at: ${p}`);
+                break;
+              }
+            }
+            
+            if (!directusCliPath) {
+              log('ERROR: Could not find Directus CLI in any expected location');
+              log('Directory contents:');
+              try {
+                const files = fs.readdirSync(directusAppPath);
+                files.slice(0, 20).forEach(f => log(`  - ${f}`));
+              } catch (e) {
+                log(`Error reading directory: ${e.message}`);
+              }
+              showErrorDialog('找不到 Directus CLI', 
+                `已检查以下位置但都不存在：\n${possiblePaths.join('\n')}\n\n请查看日志: ${logPath}`);
               return;
             }
-            log(`Directus CLI found: ${directusJs}`);
 
             // 设置环境变量
             const env = {
@@ -254,10 +283,6 @@ jobs:
               // 禁用遥测
               TELEMETRY: 'false',
               
-              // Node 路径
-              NODE_PATH: nodeModulesPath,
-              PATH: `${path.join(nodeModulesPath, '.bin')};${process.env.PATH}`,
-              
               NODE_ENV: 'production',
               
               // 日志级别
@@ -265,10 +290,10 @@ jobs:
             };
 
             log(`Environment configured, PORT: ${PORT}`);
-            log(`Spawning process: node ${directusJs} start`);
+            log(`Spawning: node "${directusCliPath}" start`);
 
             // 使用 node 直接运行 Directus CLI
-            directusProcess = spawn('node', [directusJs, 'start'], {
+            directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
               env: env,
               cwd: directusAppPath,
               stdio: ['ignore', 'pipe', 'pipe']
@@ -279,7 +304,7 @@ jobs:
               log(`[STDOUT] ${msg}`);
               
               // 检测启动成功的标志
-              if (msg.includes('Server started') || msg.includes('listening')) {
+              if (msg.includes('Server started') || msg.includes('listening') || msg.includes('ready')) {
                 log('✓ Directus 启动成功！');
               }
             });
@@ -296,6 +321,7 @@ jobs:
 
             directusProcess.on('error', (error) => {
               log(`ERROR: Failed to start process: ${error.message}`);
+              log(`Error stack: ${error.stack}`);
               showErrorDialog('启动失败', error.message);
             });
 
