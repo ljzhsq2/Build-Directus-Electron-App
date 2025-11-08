@@ -1,251 +1,320 @@
-# Directus Electron 桌面应用构建指南
+# Directus Electron App - 问题修复说明
 
-## 📋 前置要求
+## 🔍 问题诊断
 
-1. 一个 GitHub 仓库
-2. Windows 图标文件 `icon.ico`（256x256 推荐）
-
-## 🔄 构建流程说明
-
-此 GitHub Action 使用 **两阶段构建**：
-
-1. **阶段 1（Ubuntu）**：
-   - 从 Docker 镜像提取 Directus 文件
-   - **自动解决符号链接问题**（Windows 不支持符号链接）
-   - 使用 `--dereference` 标志将符号链接转换为实际文件
-   - 打包成 tar.gz 传递给下一阶段
-
-2. **阶段 2（Windows）**：
-   - 下载处理好的 Directus 文件
-   - 使用 Electron 打包成 Windows exe
-   - 自动发布到 GitHub Releases
-
-这样可以正确使用 Linux Docker 容器，同时生成 Windows 可执行文件
-
-## 🚀 设置步骤
-
-### 1. 创建仓库结构
+### 原始错误
+根据日志 `directus.log`，应用启动时出现以下错误：
 
 ```
-your-repo/
-├── .github/
-│   └── workflows/
-│       └── build.yml  (上面的 GitHub Action 文件)
-├── icon.ico          (应用图标)
-└── README.md
+ERROR: Could not find Directus CLI in any expected location
+Error reading directory: ENOENT: no such file or directory, 
+scandir 'C:\Users\User\AppData\Local\Programs\Directus\resources\app.asar.unpacked\directus-app'
 ```
 
-### 2. 配置仓库权限（重要！）
+**核心问题**：
+1. `directus-app` 目录在打包后的应用中不存在
+2. Docker 提取的文件没有正确打包到最终的 Electron 应用中
 
-**方法 1：在 workflow 文件中配置（推荐）**
-- 已在 `build.yml` 中添加了 `permissions: contents: write`
-- 无需额外配置
+---
 
-**方法 2：如果仍然报错，检查仓库设置**
-1. 进入仓库 → Settings
-2. 左侧菜单找到 **Actions** → **General**
-3. 滚动到 **Workflow permissions**
-4. 选择 **Read and write permissions**
-5. 点击 **Save**
+## 🛠️ 修复方案
 
-### 3. 添加图标文件
+### 1. **修复 Docker 文件提取 (extract-directus job)**
 
-将一个 256x256 的 `.ico` 图标文件放在仓库根目录，命名为 `icon.ico`
+#### 修复内容：
+- ✅ 修改提取路径：从 `/directus` 提取到 `directus-app/` 目录
+- ✅ 添加详细验证步骤，确认文件结构
+- ✅ 改进符号链接处理逻辑
+- ✅ 添加 CLI 文件查找验证
 
-### 4. 触发构建
-
-有两种方式触发构建：
-
-#### 方式 1：使用 Git Tag（推荐）
+#### 关键改动：
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+# 原来：直接提取到 directus-files
+docker cp directus-temp:/directus ./directus-files
+
+# 修复后：创建目录并提取
+mkdir -p directus-app
+docker cp directus-temp:/directus/. ./directus-app/
 ```
 
-#### 方式 2：手动触发
-1. 进入 GitHub 仓库
-2. 点击 Actions 标签
-3. 选择 "Build Directus Electron App"
-4. 点击 "Run workflow"
-5. 输入版本号（如 1.0.0）
+---
 
-## 📦 构建产物
+### 2. **修复 Windows 构建阶段 (build-windows job)**
 
-构建完成后，会在 Releases 页面生成：
-- 文件名格式：`Directus-Desktop-{版本号}-Windows-x64-Setup.exe`
-- 例如：`Directus-Desktop-1.0.0-Windows-x64-Setup.exe`
-- 大小：约 150-200MB
-- 包含完整的 Directus 11.5.1 和运行时
+#### 修复内容：
+- ✅ 改进解压验证逻辑
+- ✅ 添加关键文件检查（cli.js, package.json 等）
+- ✅ 详细的错误提示和调试信息
+- ✅ 确保 `directus-app` 目录正确传递到构建阶段
 
-## ⚙️ 应用功能
-
-构建的应用会：
-1. 内置完整的 Directus 11.5.1
-2. 使用 SQLite 数据库（存储在用户数据目录）
-3. 自动启动 Directus 服务器（端口 8055）
-4. 打开内置浏览器访问 Directus 界面
-
-## 🔧 高级配置
-
-### 修改 Directus 版本
-
-编辑 `.github/workflows/build.yml` 第 28 行：
+#### 关键改动：
 ```bash
-npm install directus@11.5.1
+# 添加多个验证步骤
+- 验证下载的 tar.gz 文件
+- 验证解压后的目录结构
+- 检查关键文件是否存在
+- 构建前最终验证
 ```
 
-将 `directus@11.5.1` 改为你需要的版本（如 `directus@11.6.0`）
+---
 
-### 修改数据库配置
+### 3. **修复 Electron Builder 配置 (package.json)**
 
-编辑 `main.js` 中的环境变量部分（第 35-60 行），可以改用 PostgreSQL、MySQL 或其他数据库：
+#### 修复内容：
+- ✅ 确保 `directus-app/**/*` 包含在打包文件中
+- ✅ 添加 `asarUnpack` 配置，将整个 `directus-app` 解压到 `app.asar.unpacked`
+- ✅ 改进文件过滤规则，减少打包体积
 
+#### 关键改动：
+```json
+{
+  "build": {
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.ico",
+      "directus-app/**/*"  // 包含所有 directus 文件
+    ],
+    "asarUnpack": [
+      "directus-app/**/*"  // 解压到 app.asar.unpacked
+    ]
+  }
+}
+```
+
+**为什么需要 `asarUnpack`？**
+- Electron 默认将文件打包到 `app.asar` 归档中
+- Node.js 的某些模块（如 better-sqlite3）需要访问实际的文件系统
+- `asarUnpack` 确保这些文件被解压到 `app.asar.unpacked/` 目录
+
+---
+
+### 4. **优化路径查找逻辑 (main.js)**
+
+#### 修复内容：
+- ✅ 改进 `getDirectusPath()` 函数，支持多种路径
+- ✅ 添加备用路径尝试机制
+- ✅ 详细的路径验证和日志记录
+- ✅ 改进 `findDirectusCLI()` 函数，支持更多 CLI 位置
+
+#### 关键改动：
 ```javascript
-// PostgreSQL 示例
-DB_CLIENT: 'pg',
-DB_HOST: 'localhost',
-DB_PORT: '5432',
-DB_DATABASE: 'directus',
-DB_USER: 'postgres',
-DB_PASSWORD: 'password'
+function getDirectusPath() {
+  let directusPath;
+  
+  if (app.isPackaged) {
+    // 打包后：优先使用 app.asar.unpacked 路径
+    directusPath = path.join(
+      process.resourcesPath, 
+      'app.asar.unpacked', 
+      'directus-app'
+    );
+  } else {
+    // 开发模式
+    directusPath = path.join(__dirname, 'directus-app');
+  }
+  
+  // 如果主路径不存在，尝试备用路径
+  if (!fs.existsSync(directusPath)) {
+    const alternativePaths = [
+      path.join(process.resourcesPath, 'directus-app'),
+      path.join(app.getAppPath(), 'directus-app'),
+      path.join(__dirname, 'directus-app')
+    ];
+    
+    for (const altPath of alternativePaths) {
+      if (fs.existsSync(altPath)) {
+        directusPath = altPath;
+        break;
+      }
+    }
+  }
+  
+  return directusPath;
+}
 ```
 
-### 自定义端口
+---
 
-修改 `main.js` 中的 `PORT` 环境变量
+### 5. **增强错误处理和日志**
 
-## ⚠️ 注意事项
+#### 修复内容：
+- ✅ 添加应用启动时的系统信息日志
+- ✅ 详细记录路径查找过程
+- ✅ 列出目录内容帮助诊断
+- ✅ 改进错误对话框，提供日志位置
+- ✅ 在加载页面显示实时启动日志
 
-1. **构建时间**：
-   - 阶段 1（提取文件）：约 3-5 分钟
-   - 阶段 2（打包 exe）：约 10-15 分钟
-   - 总计：约 15-20 分钟
+#### 关键改动：
+```javascript
+// 启动时记录关键信息
+log('=== Application Starting ===');
+log(`App version: ${app.getVersion()}`);
+log(`Electron version: ${process.versions.electron}`);
+log(`Is packaged: ${app.isPackaged}`);
+log(`Resources path: ${process.resourcesPath}`);
 
-2. **安装包大小**：
-   - 安装包：约 150-200MB
-   - 安装后：约 300-400MB（包含完整的 Node.js 和 Directus）
+// 如果找不到目录，列出可用内容
+if (!fs.existsSync(directusPath)) {
+  log('Listing process.resourcesPath contents:');
+  const items = fs.readdirSync(process.resourcesPath);
+  items.forEach(item => log(`  - ${item}`));
+}
+```
 
-3. **系统要求**：
-   - Windows 10/11 x64
-   - 至少 4GB RAM
-   - 至少 500MB 可用磁盘空间
+---
 
-4. **数据库位置**：
-   - 用户数据存储在 `%APPDATA%\directus-desktop\database\directus.db`
+## 📋 验证清单
 
-5. **默认账号**：
-   - 首次启动使用 `admin@example.com` / `admin` 登录
-   - **重要**：登录后请立即修改密码！
+构建流程中添加了多个验证点：
 
-6. **端口占用**：
-   - 默认使用 8055 端口
-   - 如果被占用，需要关闭占用该端口的程序
+### Extract 阶段：
+- ✅ 验证 Docker 镜像拉取
+- ✅ 验证文件提取
+- ✅ 验证 CLI 入口点存在
+- ✅ 验证符号链接处理
+- ✅ 验证打包文件大小
 
-## 🐛 故障排查
+### Build 阶段：
+- ✅ 验证 artifact 下载
+- ✅ 验证解压后的目录结构
+- ✅ 验证关键文件存在
+- ✅ 验证 package.json 配置
+- ✅ 验证最终构建输出
 
-### 启动卡住：一直显示"启动中"
+### Runtime 阶段：
+- ✅ 验证 directus-app 路径
+- ✅ 验证 CLI 文件可访问
+- ✅ 验证进程启动
+- ✅ 验证健康检查端点
 
-这是最常见的问题，可能的原因：
+---
 
-**步骤 1：查看日志文件**
-- 日志位置：`%APPDATA%\directus-desktop\directus.log`
-- 或按 Windows + R，输入：`%APPDATA%\directus-desktop\`
-- 打开 `directus.log` 查看详细错误信息
+## 🚀 使用新版本
 
-**步骤 2：按 F12 打开开发者工具**
-- 在启动页面按 F12
-- 查看 Console 标签中的错误信息
-- 截图并报告问题
+### 触发构建：
 
-**常见问题和解决方案：**
+**方式 1：手动触发**
+```bash
+# 在 GitHub Actions 页面手动触发
+# 输入版本号，例如：1.0.1
+```
 
-1. **端口 8055 被占用**
-   ```
-   错误信息：EADDRINUSE
-   解决方法：
-   - 打开任务管理器，结束占用 8055 端口的进程
-   - 或重启电脑
-   ```
+**方式 2：标签触发**
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
 
-2. **缺少 SQLite 依赖或 CLI 文件**
-   ```
-   错误信息：Cannot find module 'better-sqlite3'
-   或：Directus CLI not found
-   解决方法：
-   - 这是 Docker 镜像结构问题
-   - 查看日志中的 "Checking:" 行，确认检查了哪些路径
-   - 可能需要调整 GitHub Action 中的提取逻辑
-   ```
+### 预期结果：
 
-3. **Node 路径问题**
-   ```
-   错误信息：'node' is not recognized
-   解决方法：这是打包配置问题
-   ```
+1. ✅ Extract 阶段成功提取 Directus 文件
+2. ✅ Build 阶段成功创建安装包
+3. ✅ 安装包运行时能找到 `directus-app` 目录
+4. ✅ 应用正常启动 Directus 服务
+5. ✅ 用户可以访问 `http://localhost:8055/admin`
 
-4. **权限问题**
-   ```
-   错误信息：EACCES 或 Permission denied
-   解决方法：
-   - 右键应用程序 → 以管理员身份运行
-   - 检查 %APPDATA% 目录权限
-   ```
+---
 
-### 构建失败
+## 🐛 调试指南
 
-**问题**：`Resource not accessible by integration` 错误
-- ✅ 已在 workflow 添加 `permissions: contents: write`
-- 如果还是报错，按照上面"设置步骤 → 2. 配置仓库权限"操作
-- 确保仓库的 Actions 有写入权限
+如果仍然遇到问题，按以下步骤调试：
 
-**问题**：`Cannot create symlink` 错误
-- ✅ 已修复：在 Ubuntu 阶段使用 `--dereference` 解决符号链接
-- 符号链接会被自动转换为实际文件
-- 如果还有问题，检查 tar 命令是否正确执行
+### 1. 检查构建日志
+- 查看 GitHub Actions 的完整日志
+- 重点关注 "Extract Directus files" 和 "Verify directus-app before build" 步骤
 
-**问题**：阶段 1 失败（Ubuntu）
-- 检查 Docker 镜像版本是否正确
-- 确认网络连接正常
+### 2. 检查本地日志
+安装应用后，查看日志文件：
+```
+C:\Users\<用户名>\AppData\Roaming\directus-desktop\directus.log
+```
 
-**问题**：阶段 2 失败（Windows）
-- 检查 Actions 日志中的错误信息
-- 确保 `icon.ico` 文件存在于仓库根目录
-- 验证 package.json 语法正确
+关键信息：
+- `Resources path`: 查看资源路径
+- `Checking: ...`: 查看尝试的 CLI 路径
+- `Directory contents`: 查看实际可用的文件
 
-### 应用无法启动
+### 3. 按 F12 查看实时日志
+- 启动应用后按 F12 打开开发者工具
+- 查看 Console 中的详细日志
 
-**问题**：双击 exe 没有反应
-- 右键 → 以管理员身份运行
-- 检查 Windows Defender 是否拦截
+### 4. 手动验证打包结果
+下载并解压安装包后，检查：
+```
+resources\
+├── app.asar              (主应用归档)
+└── app.asar.unpacked\    (解压的文件)
+    └── directus-app\     (应该包含 Directus 文件)
+        ├── cli.js        (或 dist/cli.js)
+        ├── package.json
+        └── node_modules\
+```
 
-**问题**：启动后一直显示"启动中"
-- 检查端口 8055 是否被占用（打开任务管理器查看）
-- 查看 `%APPDATA%\directus-desktop\` 目录权限
-- 尝试删除数据库文件重新初始化
+---
 
-**问题**：启动后一直显示"启动中"
-- 按 F12 打开开发者工具查看错误
-- 查看日志文件：`%APPDATA%\directus-desktop\directus.log`
-- 检查端口 8055 是否被占用（打开任务管理器查看）
-- 尝试删除数据库文件重新初始化：删除 `%APPDATA%\directus-desktop\database\` 目录
-- 以管理员身份运行应用
+## 📊 技术细节
 
-**问题**：无法访问管理界面
-- 确认防火墙没有阻止 localhost 连接
-- 尝试在浏览器直接访问 `http://localhost:8055/admin`
+### Electron 打包机制
 
-### 数据丢失
+```
+打包前:
+project/
+├── main.js
+├── directus-app/
+│   ├── cli.js
+│   └── node_modules/
 
-**如何备份数据**：
-1. 关闭 Directus 应用
-2. 复制整个 `%APPDATA%\directus-desktop\` 目录
-3. 保存到安全位置
+打包后:
+resources/
+├── app.asar                      (压缩归档)
+│   ├── main.js
+│   └── preload.js
+└── app.asar.unpacked/            (未压缩文件)
+    └── directus-app/
+        ├── cli.js
+        └── node_modules/
+```
 
-**如何恢复数据**：
-1. 关闭 Directus 应用
-2. 将备份的目录覆盖回 `%APPDATA%\directus-desktop\`
-3. 重新启动应用
+### 路径解析优先级
 
-## 📝 许可证
+1. `process.resourcesPath/app.asar.unpacked/directus-app` (打包后优先)
+2. `process.resourcesPath/directus-app` (备用路径 1)
+3. `app.getAppPath()/directus-app` (备用路径 2)
+4. `__dirname/directus-app` (开发模式)
 
-请确保遵守 Directus 的开源许可证
+---
+
+## ✅ 修复总结
+
+| 问题 | 原因 | 解决方案 | 状态 |
+|------|------|----------|------|
+| directus-app 不存在 | Docker 文件提取路径错误 | 修改为 `docker cp ... ./directus-app/` | ✅ |
+| 目录结构不对 | 解压逻辑有误 | 改进解压和验证逻辑 | ✅ |
+| 打包后找不到文件 | 未配置 asarUnpack | 添加 `asarUnpack: ["directus-app/**/*"]` | ✅ |
+| CLI 路径查找失败 | 只检查单一路径 | 添加多路径尝试机制 | ✅ |
+| 错误信息不清晰 | 缺少调试日志 | 添加详细日志和验证步骤 | ✅ |
+
+---
+
+## 🎯 下一步
+
+1. **测试新版本**：触发新的构建并下载测试
+2. **验证功能**：确保 Directus 正常启动和运行
+3. **收集反馈**：如果还有问题，提供完整的日志文件
+
+---
+
+## 📞 联系支持
+
+如果问题仍然存在：
+1. 在 GitHub Issues 中创建新 issue
+2. 附上完整的 `directus.log` 文件
+3. 提供 GitHub Actions 构建日志链接
+4. 说明你的系统环境（Windows 版本等）
+
+---
+
+**修复版本**: 1.0.1  
+**修复日期**: 2025-11-08  
+**修复内容**: Docker 文件提取、路径查找、打包配置、日志增强
