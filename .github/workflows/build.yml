@@ -1,0 +1,204 @@
+name: Build Directus Electron App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Directus from Docker
+        shell: bash
+        run: |
+          # 创建临时目录
+          mkdir -p directus-app
+          
+          # 从 Docker 镜像提取文件
+          docker create --name directus-temp directus/directus:11.5.1
+          docker cp directus-temp:/directus ./directus-app/
+          docker rm directus-temp
+          
+          echo "Directus files extracted successfully"
+
+      - name: Create Electron app structure
+        shell: bash
+        run: |
+          # 创建 package.json
+          cat > package.json << 'EOF'
+          {
+            "name": "directus-desktop",
+            "version": "${{ github.event.inputs.version || '1.0.0' }}",
+            "description": "Directus Desktop Application",
+            "main": "main.js",
+            "scripts": {
+              "start": "electron .",
+              "build": "electron-builder --win --x64"
+            },
+            "author": "Your Name",
+            "license": "MIT",
+            "devDependencies": {
+              "electron": "^28.0.0",
+              "electron-builder": "^24.9.1"
+            },
+            "build": {
+              "appId": "com.directus.desktop",
+              "productName": "Directus",
+              "win": {
+                "target": "nsis",
+                "icon": "icon.ico"
+              },
+              "files": [
+                "main.js",
+                "directus-app/**/*"
+              ],
+              "directories": {
+                "output": "dist"
+              }
+            }
+          }
+          EOF
+
+          # 创建 main.js
+          cat > main.js << 'EOF'
+          const { app, BrowserWindow } = require('electron');
+          const path = require('path');
+          const { spawn } = require('child_process');
+
+          let mainWindow;
+          let directusProcess;
+
+          function startDirectus() {
+            const directusPath = path.join(__dirname, 'directus-app', 'directus');
+            const nodePath = process.execPath; // 使用 Electron 内置的 Node.js
+            
+            // 设置环境变量
+            const env = {
+              ...process.env,
+              PORT: '8055',
+              HOST: '0.0.0.0',
+              PUBLIC_URL: 'http://localhost:8055',
+              DB_CLIENT: 'sqlite3',
+              DB_FILENAME: path.join(app.getPath('userData'), 'directus.db')
+            };
+
+            directusProcess = spawn(nodePath, [directusPath, 'start'], {
+              env: env,
+              cwd: path.join(__dirname, 'directus-app')
+            });
+
+            directusProcess.stdout.on('data', (data) => {
+              console.log(`Directus: ${data}`);
+            });
+
+            directusProcess.stderr.on('data', (data) => {
+              console.error(`Directus Error: ${data}`);
+            });
+          }
+
+          function createWindow() {
+            mainWindow = new BrowserWindow({
+              width: 1400,
+              height: 900,
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true
+              },
+              icon: path.join(__dirname, 'icon.ico')
+            });
+
+            // 等待 Directus 启动
+            setTimeout(() => {
+              mainWindow.loadURL('http://localhost:8055');
+            }, 5000);
+
+            mainWindow.on('closed', () => {
+              mainWindow = null;
+            });
+          }
+
+          app.on('ready', () => {
+            startDirectus();
+            createWindow();
+          });
+
+          app.on('window-all-closed', () => {
+            if (directusProcess) {
+              directusProcess.kill();
+            }
+            if (process.platform !== 'darwin') {
+              app.quit();
+            }
+          });
+
+          app.on('activate', () => {
+            if (mainWindow === null) {
+              createWindow();
+            }
+          });
+          EOF
+
+          # 创建默认图标（如果没有的话）
+          echo "Please add an icon.ico file to your repository"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Electron app
+        run: npm run build
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" == "tag" ]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Rename installer
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd dist
+          # 找到生成的安装包并重命名
+          for file in *.exe; do
+            if [ -f "$file" ]; then
+              mv "$file" "Directus-${VERSION}-Setup.exe"
+              echo "Renamed to: Directus-${VERSION}-Setup.exe"
+            fi
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Directus Desktop v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/Directus-${{ steps.version.outputs.version }}-Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
