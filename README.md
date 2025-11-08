@@ -167,10 +167,14 @@ DB_PASSWORD: 'password'
    - 或重启电脑
    ```
 
-2. **缺少 SQLite 依赖**
+2. **缺少 SQLite 依赖或 CLI 文件**
    ```
    错误信息：Cannot find module 'better-sqlite3'
-   解决方法：这是打包问题，需要重新构建
+   或：Directus CLI not found
+   解决方法：
+   - 这是 Docker 镜像结构问题
+   - 查看日志中的 "Checking:" 行，确认检查了哪些路径
+   - 可能需要调整 GitHub Action 中的提取逻辑
    ```
 
 3. **Node 路径问题**
@@ -218,6 +222,13 @@ DB_PASSWORD: 'password'
 - 检查端口 8055 是否被占用（打开任务管理器查看）
 - 查看 `%APPDATA%\directus-desktop\` 目录权限
 - 尝试删除数据库文件重新初始化
+
+**问题**：启动后一直显示"启动中"
+- 按 F12 打开开发者工具查看错误
+- 查看日志文件：`%APPDATA%\directus-desktop\directus.log`
+- 检查端口 8055 是否被占用（打开任务管理器查看）
+- 尝试删除数据库文件重新初始化：删除 `%APPDATA%\directus-desktop\database\` 目录
+- 以管理员身份运行应用
 
 **问题**：无法访问管理界面
 - 确认防火墙没有阻止 localhost 连接
