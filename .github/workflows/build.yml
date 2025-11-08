@@ -82,15 +82,19 @@ jobs:
       - name: Extract Directus files
         shell: bash
         run: |
-          # 解压 Directus 文件
+          # 解压 Directus 文件（Windows 会自动忽略符号链接）
           tar -xzf directus-files.tar.gz
           
           # 移动到目标目录
           mkdir -p directus-app
-          mv directus-files/* directus-app/ || true
+          if [ -d "directus-files" ]; then
+            mv directus-files/* directus-app/ 2>/dev/null || true
+            mv directus-files/.* directus-app/ 2>/dev/null || true
+          fi
           
           echo "Directus files extracted to directus-app/"
-          ls -la directus-app/
+          echo "Directory contents:"
+          ls -la directus-app/ | head -20
 
       - name: Create Electron app structure
         shell: bash
@@ -162,7 +166,7 @@ jobs:
 
           # 创建 main.js
           cat > main.js << 'EOF'
-          const { app, BrowserWindow, ipcMain, shell } = require('electron');
+          const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
           const path = require('path');
           const { spawn } = require('child_process');
           const fs = require('fs');
@@ -170,6 +174,7 @@ jobs:
           let mainWindow;
           let directusProcess;
           const PORT = 8055;
+          let startupLogs = [];
 
           function getDirectusPath() {
             if (app.isPackaged) {
@@ -183,14 +188,42 @@ jobs:
             const directusAppPath = getDirectusPath();
             const nodeModulesPath = path.join(directusAppPath, 'node_modules');
             const directusBin = path.join(nodeModulesPath, '.bin', 'directus.cmd');
+            const directusJs = path.join(nodeModulesPath, 'directus', 'dist', 'cli', 'index.js');
             const userDataPath = app.getPath('userData');
             const dbPath = path.join(userDataPath, 'database', 'directus.db');
+            const logPath = path.join(userDataPath, 'directus.log');
+            
+            // 创建日志流
+            const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+            
+            function log(msg) {
+              const timestamp = new Date().toISOString();
+              const logMsg = `[${timestamp}] ${msg}\n`;
+              logStream.write(logMsg);
+              console.log(msg);
+              startupLogs.push(msg);
+            }
+            
+            log('=== Directus 启动开始 ===');
+            log(`App path: ${directusAppPath}`);
+            log(`Node modules: ${nodeModulesPath}`);
+            log(`Database path: ${dbPath}`);
+            log(`Log path: ${logPath}`);
             
             // 确保数据库目录存在
             const dbDir = path.dirname(dbPath);
             if (!fs.existsSync(dbDir)) {
               fs.mkdirSync(dbDir, { recursive: true });
+              log(`Created database directory: ${dbDir}`);
             }
+            
+            // 检查关键文件
+            if (!fs.existsSync(directusJs)) {
+              log(`ERROR: Directus CLI not found at: ${directusJs}`);
+              showErrorDialog('找不到 Directus CLI 文件！', `路径: ${directusJs}`);
+              return;
+            }
+            log(`Directus CLI found: ${directusJs}`);
 
             // 设置环境变量
             const env = {
@@ -225,40 +258,61 @@ jobs:
               NODE_PATH: nodeModulesPath,
               PATH: `${path.join(nodeModulesPath, '.bin')};${process.env.PATH}`,
               
-              NODE_ENV: 'production'
+              NODE_ENV: 'production',
+              
+              // 日志级别
+              LOG_LEVEL: 'info'
             };
 
-            console.log('Starting Directus from:', directusBin);
-            console.log('Database location:', dbPath);
-            console.log('App path:', directusAppPath);
+            log(`Environment configured, PORT: ${PORT}`);
+            log(`Spawning process: node ${directusJs} start`);
 
-            // Windows 使用 cmd 来执行
-            directusProcess = spawn('cmd', ['/c', directusBin, 'start'], {
+            // 使用 node 直接运行 Directus CLI
+            directusProcess = spawn('node', [directusJs, 'start'], {
               env: env,
               cwd: directusAppPath,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              shell: true
+              stdio: ['ignore', 'pipe', 'pipe']
             });
 
             directusProcess.stdout.on('data', (data) => {
-              console.log(`[Directus] ${data.toString().trim()}`);
+              const msg = data.toString().trim();
+              log(`[STDOUT] ${msg}`);
+              
+              // 检测启动成功的标志
+              if (msg.includes('Server started') || msg.includes('listening')) {
+                log('✓ Directus 启动成功！');
+              }
             });
 
             directusProcess.stderr.on('data', (data) => {
               const msg = data.toString().trim();
-              // 只记录真正的错误，忽略警告
-              if (!msg.includes('DeprecationWarning')) {
-                console.error(`[Directus] ${msg}`);
+              // 过滤掉无害的警告
+              if (!msg.includes('DeprecationWarning') && 
+                  !msg.includes('ExperimentalWarning') &&
+                  !msg.includes('punycode')) {
+                log(`[STDERR] ${msg}`);
               }
             });
 
             directusProcess.on('error', (error) => {
-              console.error('Failed to start Directus:', error);
+              log(`ERROR: Failed to start process: ${error.message}`);
+              showErrorDialog('启动失败', error.message);
             });
 
             directusProcess.on('close', (code) => {
-              console.log(`Directus process exited with code ${code}`);
+              log(`Process exited with code ${code}`);
+              if (code !== 0 && code !== null) {
+                showErrorDialog('进程异常退出', `退出代码: ${code}\n\n请查看日志: ${logPath}`);
+              }
             });
+            
+            log('Process spawned, waiting for startup...');
+          }
+          
+          function showErrorDialog(title, message) {
+            if (mainWindow) {
+              dialog.showErrorBox(title, message + '\n\n日志位置:\n' + path.join(app.getPath('userData'), 'directus.log'));
+            }
           }
 
           function createWindow() {
@@ -282,20 +336,49 @@ jobs:
                   <title>Directus 启动中</title>
                 </head>
                 <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);">
-                  <div style="text-align:center;color:white;">
+                  <div style="text-align:center;color:white;max-width:600px;padding:20px;">
                     <div style="font-size:64px;margin-bottom:20px;">🚀</div>
                     <h1 style="font-size:32px;font-weight:600;margin:0 0 10px 0;">Directus 启动中</h1>
-                    <p style="font-size:16px;opacity:0.9;margin:0 0 30px 0;">请稍候，首次启动可能需要 10-15 秒</p>
-                    <div style="width:300px;height:4px;background:rgba(255,255,255,0.3);border-radius:2px;overflow:hidden;margin:0 auto;">
+                    <p style="font-size:16px;opacity:0.9;margin:0 0 30px 0;">首次启动需要初始化数据库，请稍候...</p>
+                    <div style="width:300px;height:4px;background:rgba(255,255,255,0.3);border-radius:2px;overflow:hidden;margin:0 auto 20px auto;">
                       <div style="width:100%;height:100%;background:white;animation:slide 1.5s ease-in-out infinite;"></div>
                     </div>
+                    <div id="logs" style="margin-top:30px;padding:15px;background:rgba(0,0,0,0.3);border-radius:8px;max-height:200px;overflow-y:auto;text-align:left;font-size:12px;font-family:monospace;line-height:1.6;">
+                      <div>正在初始化...</div>
+                    </div>
+                    <button onclick="showLogs()" style="margin-top:20px;padding:10px 20px;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.3);color:white;border-radius:5px;cursor:pointer;font-size:14px;">
+                      查看详细日志
+                    </button>
                     <style>
                       @keyframes slide {
                         0% { transform: translateX(-100%); }
                         50% { transform: translateX(0); }
                         100% { transform: translateX(100%); }
                       }
+                      button:hover {
+                        background:rgba(255,255,255,0.3);
+                      }
                     </style>
+                    <script>
+                      let logInterval;
+                      window.addEventListener('load', function() {
+                        // 模拟日志更新（实际应用中应该从主进程获取）
+                        const logs = document.getElementById('logs');
+                        let dots = 0;
+                        logInterval = setInterval(function() {
+                          dots = (dots + 1) % 4;
+                          logs.innerHTML = '<div>正在初始化数据库' + '.'.repeat(dots) + '</div>';
+                        }, 500);
+                      });
+                      
+                      function showLogs() {
+                        if (window.electronAPI) {
+                          window.electronAPI.openExternal('file://' + window.electronAPI.getAppPath() + '/directus.log');
+                        } else {
+                          alert('日志文件位置: ' + (navigator.platform.includes('Win') ? '%APPDATA%' : '~') + '/directus-desktop/directus.log');
+                        }
+                      }
+                    </script>
                   </div>
                 </body>
               </html>
@@ -305,10 +388,10 @@ jobs:
               mainWindow.show();
             });
 
-            // 等待 Directus 启动
+            // 等待 Directus 启动 - 增加等待时间，首次需要初始化数据库
             setTimeout(() => {
               checkDirectusReady();
-            }, 10000);
+            }, 15000);
 
             mainWindow.on('closed', () => {
               mainWindow = null;
@@ -322,8 +405,13 @@ jobs:
           }
 
           function checkDirectusReady(attempts = 0) {
-            if (attempts > 30) {
-              console.error('Directus failed to start after 30 attempts');
+            if (attempts > 60) {
+              console.error('Directus failed to start after 60 attempts (2 minutes)');
+              const logPath = path.join(app.getPath('userData'), 'directus.log');
+              showErrorDialog(
+                'Directus 启动超时',
+                `启动失败，请检查日志文件：\n${logPath}\n\n可能的原因：\n- 端口 ${PORT} 被占用\n- 数据库文件损坏\n- 缺少必要的依赖`
+              );
               return;
             }
 
@@ -332,25 +420,31 @@ jobs:
             const options = {
               hostname: 'localhost',
               port: PORT,
-              path: '/admin',
+              path: '/server/health',
               method: 'GET',
-              timeout: 2000
+              timeout: 3000
             };
 
             const req = http.request(options, (res) => {
-              if (res.statusCode === 200 || res.statusCode === 302 || res.statusCode === 307) {
-                console.log('Directus is ready!');
-                if (mainWindow) {
-                  mainWindow.loadURL(`http://localhost:${PORT}/admin`);
+              console.log(`Health check status: ${res.statusCode} (attempt ${attempts + 1})`);
+              
+              if (res.statusCode === 200) {
+                console.log('✓ Directus is ready!');
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                  // 再等 2 秒确保完全就绪
+                  setTimeout(() => {
+                    mainWindow.loadURL(`http://localhost:${PORT}/admin`);
+                  }, 2000);
                 }
               } else {
-                console.log(`Directus not ready yet (status: ${res.statusCode}), retrying...`);
                 setTimeout(() => checkDirectusReady(attempts + 1), 2000);
               }
             });
 
             req.on('error', (err) => {
-              console.log(`Connection error (attempt ${attempts + 1}):`, err.message);
+              if (attempts % 10 === 0) {
+                console.log(`Connection attempt ${attempts + 1}/60: ${err.message}`);
+              }
               setTimeout(() => checkDirectusReady(attempts + 1), 2000);
             });
 
@@ -374,6 +468,14 @@ jobs:
           app.on('ready', () => {
             startDirectus();
             setTimeout(createWindow, 2000);
+            
+            // 添加开发者工具快捷键 F12
+            const { globalShortcut } = require('electron');
+            globalShortcut.register('F12', () => {
+              if (mainWindow) {
+                mainWindow.webContents.toggleDevTools();
+              }
+            });
           });
 
           app.on('window-all-closed', () => {
