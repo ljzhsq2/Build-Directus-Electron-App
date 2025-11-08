@@ -3,7 +3,7 @@ name: Build Directus Electron App
 on:
   push:
     tags:
-      - 'v*' # 当 v 开头的 tag 被推送时触发
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -11,33 +11,52 @@ on:
         required: true
         default: '1.0.0'
 
-# 添加权限配置
 permissions:
-  contents: write # 允许创建 Release 和上传文件
+  contents: write
 
 jobs:
   extract-directus:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Extract Directus from Docker
         run: |
-          # 拉取 Directus Docker 镜像
+          # 拉取镜像
           docker pull directus/directus:11.5.1
-          
-          # 创建容器并提取文件
           docker create --name directus-temp directus/directus:11.5.1
           docker cp directus-temp:/directus ./directus-files
           docker rm directus-temp
-          
-          echo "=== Extracted Directus directory structure ==="
-          ls -la directus-files/
-          
-          # 打包成 tar.gz（使用 --dereference 自动解引用符号链接）
+
+          echo "=== Docker 提取文件结构 ==="
+          if command -v tree >/dev/null; then
+            tree directus-files/ || true
+          else
+            find directus-files -print | sed -e 's;[^/]*/;|____;g;s;____|; |;g' | head -50
+          fi
+
+          echo ""
+          echo "=== 查找可能的 CLI 入口 ==="
+          find directus-files \( -name "cli.js" -o -name "index.js" -o -name "directus" \) | head -20 || echo "未找到"
+
+          # 解决符号链接
+          echo "Resolving symlinks..."
+          cd directus-files
+          find . -type l | while read link; do
+            target=$(readlink "$link")
+            if [ -e "$target" ]; then
+              echo "Resolving: $link -> $target"
+              rm "$link"
+              cp -r "$target" "$link" 2>/dev/null || echo "Skipped: $link"
+            else
+              echo "Broken link: $link"
+              rm "$link"
+            fi
+          done
+          cd ..
+
+          # 打包
           tar --dereference -czf directus-files.tar.gz directus-files
-          
-          echo "Directus files extracted and packaged (symlinks resolved)"
-    
+          echo "Directus files packaged successfully"
+
       - name: Upload Directus files
         uses: actions/upload-artifact@v4
         with:
@@ -48,7 +67,6 @@ jobs:
   build-windows:
     needs: extract-directus
     runs-on: windows-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -66,38 +84,33 @@ jobs:
       - name: Extract Directus files
         shell: bash
         run: |
+          # 解压
           tar -xzf directus-files.tar.gz
-          mkdir -p directus-app
-          if [ -d "directus-files" ]; then
-            mv directus-files/* directus-app/ 2>/dev/null || true
-            mv directus-files/.* directus-app/ 2>/dev/null || true
-          fi
-          echo "Directus files extracted to directus-app/"
-          ls -la directus-app/ | head -20
 
-      # ⬇️ ⬇️ ⬇️ 修复 1：为 Directus 应用本身安装依赖 ⬇️ ⬇️ ⬇️
-      - name: Install Directus app dependencies
-        shell: bash
-        run: |
-          cd directus-app
-          if [ -f "package.json" ]; then
-            echo "✅ Found package.json, installing Directus dependencies..."
-            # 使用 --production 来减少体积
-            # 使用 --ignore-scripts 避免不必要的构建
-            # 使用 --legacy-peer-deps 解决可能的版本冲突
-            npm install --production --ignore-scripts --legacy-peer-deps
-          else
-            echo "❌ ERROR: No package.json found in directus-app/ !"
-            echo "Cannot install Directus dependencies."
+          # 创建目标目录
+          mkdir -p directus-app
+
+          # 强制复制所有内容（包括隐藏文件）
+          cp -r directus-files/* directus-app/ 2>/dev/null || true
+          cp -r directus-files/.* directus-app/ 2>/dev/null || true
+
+          # 验证
+          echo "=== directus-app 目录内容 ==="
+          ls -la directus-app/ | head -30
+
+          echo ""
+          echo "=== 查找 CLI 入口（预诊断）==="
+          find directus-app \( -name "cli.js" -o -name "index.js" -o -name "directus" \) | head -10 || echo "未找到"
+
+          if [ ! "$(ls -A directus-app)" ]; then
+            echo "ERROR: directus-app 目录为空！解压或复制失败。"
             exit 1
           fi
-          cd ..
-      # ⬆️ ⬆️ ⬆️ 修复 1 结束 ⬆️ ⬆️ ⬆️
 
       - name: Create Electron app structure
         shell: bash
         run: |
-          # 创建 package.json
+          # package.json
           cat > package.json << 'EOF'
           {
             "name": "directus-desktop",
@@ -135,13 +148,10 @@ jobs:
                 "!directus-app/node_modules/**/*.d.ts",
                 "!directus-app/node_modules/.bin"
               ],
-              
-              # ⬇️ ⬇️ ⬇️ 修复 2：修改 asarUnpack 规则 ⬇️ ⬇️ ⬇️
               "asarUnpack": [
-                "directus-app/**/*"
+                "directus-app/**/*.node",
+                "directus-app/node_modules/better-sqlite3/**/*"
               ],
-              # ⬆️ ⬆️ ⬆️ 修复 2 结束 ⬆️ ⬆️ ⬆️
-
               "directories": {
                 "output": "dist"
               },
@@ -155,22 +165,22 @@ jobs:
           }
           EOF
 
-          # 创建 preload.js
+          # preload.js
           cat > preload.js << 'EOF'
           const { contextBridge, ipcRenderer } = require('electron');
-
           contextBridge.exposeInMainWorld('electronAPI', {
             getAppPath: () => ipcRenderer.invoke('get-app-path'),
             openExternal: (url) => ipcRenderer.invoke('open-external', url)
           });
           EOF
 
-          # 创建 main.js
+          # main.js（增强版路径查找）
           cat > main.js << 'EOF'
           const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
           const path = require('path');
           const { spawn } = require('child_process');
           const fs = require('fs');
+          const os = require('os');
 
           let mainWindow;
           let directusProcess;
@@ -179,7 +189,6 @@ jobs:
 
           function getDirectusPath() {
             if (app.isPackaged) {
-              // 打包后的路径
               return path.join(process.resourcesPath, 'app.asar.unpacked', 'directus-app');
             }
             return path.join(__dirname, 'directus-app');
@@ -190,10 +199,8 @@ jobs:
             const userDataPath = app.getPath('userData');
             const dbPath = path.join(userDataPath, 'database', 'directus.db');
             const logPath = path.join(userDataPath, 'directus.log');
-            
-            // 创建日志流
+
             const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-            
             function log(msg) {
               const timestamp = new Date().toISOString();
               const logMsg = `[${timestamp}] ${msg}\n`;
@@ -201,332 +208,187 @@ jobs:
               console.log(msg);
               startupLogs.push(msg);
             }
-            
+
             log('=== Directus 启动开始 ===');
             log(`App path: ${directusAppPath}`);
             log(`Database path: ${dbPath}`);
             log(`Log path: ${logPath}`);
-            
-            // 确保数据库目录存在
+
             const dbDir = path.dirname(dbPath);
             if (!fs.existsSync(dbDir)) {
               fs.mkdirSync(dbDir, { recursive: true });
               log(`Created database directory: ${dbDir}`);
             }
-            
-            // 查找可能的 CLI 入口点
+
+            // 智能查找 CLI
             const possiblePaths = [
-              path.join(directusAppPath, 'cli.js'),                 // Docker 镜像可能的位置
+              path.join(directusAppPath, 'cli.js'),
+              path.join(directusAppPath, 'index.js'),
               path.join(directusAppPath, 'dist', 'cli.js'),
-              path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'), // npm 安装的位置
-              path.join(directusAppPath, 'dist', 'index.js')
+              path.join(directusAppPath, 'dist', 'index.js'),
+              path.join(directusAppPath, 'bin', 'cli.js'),
+              path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
+              path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'index.js'),
+              path.join(directusAppPath, 'node_modules', '.bin', 'directus'),
+              path.join(directusAppPath, 'node_modules', '.bin', 'directus.cmd'),
             ];
-            
+
             let directusCliPath = null;
             for (const p of possiblePaths) {
               log(`Checking: ${p}`);
               if (fs.existsSync(p)) {
                 directusCliPath = p;
-                log(`✓ Found Directus CLI at: ${p}`);
+                log(`Found CLI: ${p}`);
                 break;
               }
             }
-            
-            if (!directusCliPath) {
-              log('ERROR: Could not find Directus CLI in any expected location');
-              log('Directory contents (first 20):');
+
+            // 深度搜索
+            if (!directusCliPath && fs.existsSync(directusAppPath)) {
+              log("Deep searching for CLI...");
+              const findCmd = os.platform() === 'win32'
+                ? `dir "${directusAppPath}" /s /b | findstr /i "cli\\.js index\\.js directus$"`
+                : `find "${directusAppPath}" -type f \\( -name "cli.js" -o -name "index.js" -o -name "directus" \\) | head -1`;
+
+              const { execSync } = require('child_process');
               try {
-                const files = fs.readdirSync(directusAppPath);
-                files.slice(0, 20).forEach(f => log(`  - ${f}`));
-                // 检查 node_modules/directus
-                const directusModulePath = path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli');
-                if (fs.existsSync(directusModulePath)) {
-                   log(`node_modules/directus/dist/cli contents:`);
-                   fs.readdirSync(directusModulePath).slice(0, 10).forEach(f => log(`  - ${f}`));
+                const output = execSync(findCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+                const candidate = output.trim().split('\n')[0];
+                if (candidate) {
+                  directusCliPath = candidate;
+                  log(`Deep search found: ${directusCliPath}`);
                 }
               } catch (e) {
-                log(`Error reading directory: ${e.message}`);
+                log(`Deep search error: ${e.message}`);
               }
-              showErrorDialog('找不到 Directus CLI', 
-                `已检查以下位置但都不存在：\n${possiblePaths.join('\n')}\n\n请查看日志: ${logPath}`);
+            }
+
+            if (!directusCliPath) {
+              log('ERROR: CLI not found!');
+              try {
+                const files = fs.readdirSync(directusAppPath).slice(0, 30);
+                files.forEach(f => log(`  - ${f}`));
+              } catch (e) {
+                log(`Cannot read dir: ${e.message}`);
+              }
+              showErrorDialog('启动失败', `找不到 Directus CLI\n目录: ${directusAppPath}`);
               return;
             }
 
-            // 设置环境变量
             const env = {
               ...process.env,
               PORT: PORT.toString(),
               HOST: '0.0.0.0',
               PUBLIC_URL: `http://localhost:${PORT}`,
-              
-              // 数据库配置 - 使用 SQLite
               DB_CLIENT: 'sqlite3',
               DB_FILENAME: dbPath,
-              
-              // 存储配置
               STORAGE_LOCATIONS: 'local',
               STORAGE_LOCAL_ROOT: path.join(userDataPath, 'uploads'),
-              
-              // 扩展配置
               EXTENSIONS_PATH: path.join(userDataPath, 'extensions'),
-              
-              // 管理员配置（首次启动）
               ADMIN_EMAIL: 'admin@example.com',
               ADMIN_PASSWORD: 'admin',
-              
-              // 密钥
               KEY: 'directus-desktop-key-' + Math.random().toString(36),
               SECRET: 'directus-desktop-secret-' + Math.random().toString(36),
-              
-              // 禁用遥测
               TELEMETRY: 'false',
-              
               NODE_ENV: 'production',
-              
-              // 日志级别
               LOG_LEVEL: 'info'
             };
 
-            log(`Environment configured, PORT: ${PORT}`);
             log(`Spawning: node "${directusCliPath}" start`);
-
-            // 使用 node 直接运行 Directus CLI
             directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
-              env: env,
-              cwd: directusAppPath, // 设置工作目录为 directus-app 目录
-              stdio: ['ignore', 'pipe', 'pipe']
+              env, cwd: directusAppPath, stdio: ['ignore', 'pipe', 'pipe']
             });
 
-            directusProcess.stdout.on('data', (data) => {
+            directusProcess.stdout.on('data', data => {
               const msg = data.toString().trim();
               log(`[STDOUT] ${msg}`);
-              
-              // 检测启动成功的标志
-              if (msg.includes('Server started') || msg.includes('listening') || msg.includes('ready')) {
-                log('✓ Directus 启动成功！');
+              if (msg.includes('Server started') || msg.includes('listening')) {
+                log('Directus 启动成功！');
               }
             });
 
-            directusProcess.stderr.on('data', (data) => {
+            directusProcess.stderr.on('data', data => {
               const msg = data.toString().trim();
-              // 过滤掉无害的警告
-              if (!msg.includes('DeprecationWarning') && 
-                  !msg.includes('ExperimentalWarning') &&
-                  !msg.includes('punycode')) {
+              if (!msg.includes('DeprecationWarning') && !msg.includes('ExperimentalWarning')) {
                 log(`[STDERR] ${msg}`);
               }
             });
 
-            directusProcess.on('error', (error) => {
-              log(`ERROR: Failed to start process: ${error.message}`);
-              log(`Error stack: ${error.stack}`);
-              showErrorDialog('启动失败', error.message);
-            });
-
-            directusProcess.on('close', (code) => {
-              log(`Process exited with code ${code}`);
-              if (code !== 0 && code !== null) {
-                showErrorDialog('进程异常退出', `退出代码: ${code}\n\n请查看日志: ${logPath}`);
-              }
-            });
-            
-            log('Process spawned, waiting for startup...');
+            directusProcess.on('error', err => log(`Process error: ${err.message}`));
+            directusProcess.on('close', code => log(`Process exited: ${code}`));
           }
-          
+
           function showErrorDialog(title, message) {
             if (mainWindow) {
-              dialog.showErrorBox(title, message + '\n\n日志位置:\n' + path.join(app.getPath('userData'), 'directus.log'));
+              dialog.showErrorBox(title, message + `\n\n日志: ${path.join(app.getPath('userData'), 'directus.log')}`);
             }
           }
 
           function createWindow() {
             mainWindow = new BrowserWindow({
-              width: 1400,
-              height: 900,
-              webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                preload: path.join(__dirname, 'preload.js')
-              },
-              icon: path.join(__dirname, 'icon.ico'),
-              show: false
+              width: 1400, height: 900,
+              webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, 'preload.js') },
+              icon: path.join(__dirname, 'icon.ico'), show: false
             });
 
-            // 显示加载页面
-            mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
-              <html>
-                <head>
-                  <meta charset="utf-8">
-                  <title>Directus 启动中</title>
-                </head>
-                <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);">
-                  <div style="text-align:center;color:white;max-width:600px;padding:20px;">
-                    <div style="font-size:64px;margin-bottom:20px;">🚀</div>
-                    <h1 style="font-size:32px;font-weight:600;margin:0 0 10px 0;">Directus 启动中</h1>
-                    <p style="font-size:16px;opacity:0.9;margin:0 0 30px 0;">首次启动需要初始化数据库，请稍候...</p>
-                    <div style="width:300px;height:4px;background:rgba(255,255,255,0.3);border-radius:2px;overflow:hidden;margin:0 auto 20px auto;">
-                      <div style="width:100%;height:100%;background:white;animation:slide 1.5s ease-in-out infinite;"></div>
-                    </div>
-                    <div id="logs" style="margin-top:30px;padding:15px;background:rgba(0,0,0,0.3);border-radius:8px;max-height:200px;overflow-y:auto;text-align:left;font-size:12px;font-family:monospace;line-height:1.6;">
-                      <div>正在初始化...</div>
-                    </div>
-                    <style>
-                      @keyframes slide {
-                        0% { transform: translateX(-100%); }
-                        50% { transform: translateX(0); }
-                        100% { transform: translateX(100%); }
-                      }
-                    </style>
+            mainWindow.loadURL(`data:text/html,${encodeURIComponent(`
+              <html><body style="margin:0;font-family:-apple-system,Segoe UI;background:#f0f0f0;color:#333;display:flex;align-items:center;justify-content:center;height:100vh;">
+                <div style="text-align:center;">
+                  <h1>Directus 启动中...</h1>
+                  <p>首次启动需要初始化数据库，请稍候</p>
+                  <div style="width:300px;height:4px;background:#ddd;border-radius:2px;overflow:hidden;margin:20px auto;">
+                    <div style="width:100%;height:100%;background:#667eea;animation:slide 1.5s infinite;"></div>
                   </div>
-                </body>
-              </html>
+                  <button onclick="showLogs()" style="padding:8px 16px;margin-top:20px;">查看日志</button>
+                </div>
+                <style>@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>
+                <script>
+                  function showLogs() {
+                    if (window.electronAPI) {
+                      window.electronAPI.openExternal('file://' + window.electronAPI.getAppPath() + '/directus.log');
+                    }
+                  }
+                </script>
+              </body></html>
             `)}`);
 
-            mainWindow.once('ready-to-show', () => {
-              mainWindow.show();
-            });
-
-            // 等待 Directus 启动 - 增加等待时间，首次需要初始化数据库
-            setTimeout(() => {
-              checkDirectusReady();
-            }, 15000);
-
-            mainWindow.on('closed', () => {
-              mainWindow = null;
-            });
-
-            // 处理外部链接
-            mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-              shell.openExternal(url);
-              return { action: 'deny' };
-            });
+            mainWindow.once('ready-to-show', () => mainWindow.show());
+            setTimeout(() => checkDirectusReady(), 15000);
           }
 
           function checkDirectusReady(attempts = 0) {
-            if (attempts > 60) {
-              console.error('Directus failed to start after 60 attempts (2 minutes)');
-              const logPath = path.join(app.getPath('userData'), 'directus.log');
-              showErrorDialog(
-                'Directus 启动超时',
-                `启动失败，请检查日志文件：\n${logPath}\n\n可能的原因：\n- 端口 ${PORT} 被占用\n- 数据库文件损坏\n- 缺少必要的依赖`
-              );
-              return;
-            }
-
+            if (attempts > 60) return showErrorDialog('启动超时', '请检查日志');
             const http = require('http');
-            
-            const options = {
-              hostname: 'localhost',
-              port: PORT,
-              path: '/server/health',
-              method: 'GET',
-              timeout: 3000
-            };
-
-            const req = http.request(options, (res) => {
-              console.log(`Health check status: ${res.statusCode} (attempt ${attempts + 1})`);
-              
+            const req = http.request({ hostname: 'localhost', port: PORT, path: '/server/health', timeout: 3000 }, res => {
               if (res.statusCode === 200) {
-                console.log('✓ Directus is ready!');
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                  // 再等 2 秒确保完全就绪
-                  setTimeout(() => {
-                    mainWindow.loadURL(`http://localhost:${PORT}/admin`);
-                  }, 2000);
-                }
+                setTimeout(() => mainWindow.loadURL(`http://localhost:${PORT}/admin`), 2000);
               } else {
                 setTimeout(() => checkDirectusReady(attempts + 1), 2000);
               }
             });
-
-            req.on('error', (err) => {
-              if (attempts % 10 === 0) {
-                console.log(`Connection attempt ${attempts + 1}/60: ${err.message}`);
-              }
-              setTimeout(() => checkDirectusReady(attempts + 1), 2000);
-            });
-
-            req.on('timeout', () => {
-              req.destroy();
-              setTimeout(() => checkDirectusReady(attempts + 1), 2000);
-            });
-
+            req.on('error', () => setTimeout(() => checkDirectusReady(attempts + 1), 2000));
+            req.on('timeout', () => { req.destroy(); setTimeout(() => checkDirectusReady(attempts + 1), 2000); });
             req.end();
           }
 
-          // IPC handlers
-          ipcMain.handle('get-app-path', () => {
-            return app.getPath('userData');
+          ipcMain.handle('get-app-path', () => app.getPath('userData'));
+          ipcMain.handle('open-external', (e, url) => shell.openExternal(url));
+
+          app.on('ready', () => {
+            startDirectus();
+            setTimeout(createWindow, 2000);
+            const { globalShortcut } = require('electron');
+            globalShortcut.register('F12', () => mainWindow?.webContents.toggleDevTools());
           });
 
-          ipcMain.handle('open-external', (event, url) => {
-            shell.openExternal(url);
-          });
-          
-          # ⬇️ ⬇️ ⬇️ 修复 3：添加单例锁，防止多开 ⬇️ ⬇️ ⬇️
-          const gotTheLock = app.requestSingleInstanceLock();
-
-          if (!gotTheLock) {
-            // 如果获取锁失败，说明已有实例在运行，立即退出新实例
-            app.quit();
-          } else {
-            app.on('second-instance', (event, commandLine, workingDirectory) => {
-              // 当用户尝试运行第二个实例时，我们聚焦到已有的窗口
-              if (mainWindow) {
-                if (mainWindow.isMinimized()) mainWindow.restore();
-                mainWindow.focus();
-              }
-            });
-
-            // 只有获取锁成功的实例才继续执行
-            app.on('ready', () => {
-              startDirectus();
-              setTimeout(createWindow, 2000);
-              
-              // 添加开发者工具快捷键 F12
-              const { globalShortcut } = require('electron');
-              globalShortcut.register('F12', () => {
-                if (mainWindow) {
-                  mainWindow.webContents.toggleDevTools();
-                }
-              });
-            });
-
-            app.on('window-all-closed', () => {
-              if (directusProcess) {
-                directusProcess.kill();
-              }
-              if (process.platform !== 'darwin') {
-                app.quit();
-              }
-            });
-
-            app.on('activate', () => {
-              if (mainWindow === null) {
-                createWindow();
-              }
-            });
-
-            app.on('before-quit', () => {
-              if (directusProcess) {
-                directusProcess.kill('SIGTERM');
-                setTimeout(() => {
-                  if (directusProcess && !directusProcess.killed) {
-                    directusProcess.kill('SIGKILL');
-                  }
-                }, 1000);
-              }
-            });
-            
-          } // ⬅️ 修复 3：单例锁 'else' 块的闭合括号
-          # ⬆️ ⬆️ ⬆️ 修复 3 结束 ⬆️ ⬆️ ⬆️
-
+          app.on('window-all-closed', () => { if (directusProcess) directusProcess.kill(); if (process.platform !== 'darwin') app.quit(); });
+          app.on('before-quit', () => { if (directusProcess) { directusProcess.kill('SIGTERM'); setTimeout(() => directusProcess.kill('SIGKILL'), 1000); } });
           EOF
 
-          echo "Electron app structure created"
+          echo "Electron app structure created with enhanced CLI detection"
 
       - name: Install Electron dependencies
-        run: npm install # 这个 npm install 只安装根目录的 electron 和 electron-builder
+        run: npm install
 
       - name: Build Electron app
         env:
@@ -548,26 +410,21 @@ jobs:
       - name: List build output
         shell: bash
         run: |
-          echo "Build output files:"
-          ls -lh dist/
+          echo "Build output:"
+          ls -lh dist/ || echo "dist/ not found"
 
       - name: Rename and prepare installer
-        id: rename # 给这个步骤一个 id
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cd dist
-          
-          # 找到生成的 exe 安装包
           INSTALLER_FILE=$(find . -maxdepth 1 -name "*.exe" -type f | head -n 1)
-          
           if [ -n "$INSTALLER_FILE" ]; then
             NEW_NAME="Directus-Desktop-${VERSION}-Windows-x64-Setup.exe"
             mv "$INSTALLER_FILE" "$NEW_NAME"
-            echo "✅ Renamed installer to: $NEW_NAME"
-            echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT # 输出文件名
+            echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT
           else
-            echo "❌ No installer file found!"
+            echo "No .exe found!"
             exit 1
           fi
 
@@ -577,66 +434,14 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: Directus Desktop v${{ steps.version.outputs.version }}
           body: |
-            ## 🎉 Directus Desktop v${{ steps.version.outputs.version }}
-            
+            ## Directus Desktop v${{ steps.version.outputs.version }}
+
             基于 **Directus 11.5.1** 的 Windows 桌面版本
-            
-            ### 📥 下载与安装
-            
-            1. ⬇️ 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe`
-            2. 🖱️ 双击运行安装程序
-            3. ⏱️ 首次启动等待 10-15 秒初始化数据库
-            4. 🎊 开始使用！
-            
-            ### 🔐 默认管理员账号
-            
-            首次访问时使用以下账号登录：
-            - **邮箱**：`admin@example.com`
-            - **密码**：`admin`
-            
-            ⚠️ **重要**：登录后请立即修改密码！
-            
-            ### ✨ 功能特性
-            
-            - ✅ 完整的 Directus CMS 功能
-            - ✅ 内置 SQLite 数据库（无需额外配置）
-            - ✅ 数据自动保存到用户目录
-            - ✅ 支持文件上传和管理
-            - ✅ 完全离线可用
-            - ✅ 一键启动，开箱即用
-            
-            ### 📂 数据存储位置
-            
-            所有数据保存在：
-            ```
-            C:\Users\<你的用户名>\AppData\Roaming\directus-desktop\
-            ├── database\
-            │   └── directus.db     (数据库文件)
-            ├── uploads\            (上传的文件)
-            └── extensions\         (扩展插件)
-            ```
-            
-            ### 💡 使用提示
-            
-            - 访问地址：`http://localhost:8055/admin`
-            - 关闭窗口即停止服务
-            - 卸载不会删除数据，需手动删除上述目录
-            
-            ### 🐛 遇到问题？
-            
-            - 如果启动失败，检查端口 8055 是否被占用
-            - 如果忘记密码，可以删除数据库文件重新初始化
-            - 更多问题请提交 Issue
-            
-            ---
-            
-            📦 **文件信息**
-            - 版本：v${{ steps.version.outputs.version }}
-            - Directus 版本：11.5.1
-            - 架构：Windows x64
-          draft: false
-          prerelease: false
-          files: |
-            dist/${{ steps.rename.outputs.installer_name }} # 使用上一步的输出
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            ### 下载安装
+            1. 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe`
+            2. 双击安装
+            3. 首次启动等待 15 秒
+            4. 使用 `admin@example.com` / `admin` 登录
+
+            ### 数据存储
