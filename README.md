@@ -143,12 +143,61 @@ DB_PASSWORD: 'password'
 
 ## 🐛 故障排查
 
+### 启动卡住：一直显示"启动中"
+
+这是最常见的问题，可能的原因：
+
+**步骤 1：查看日志文件**
+- 日志位置：`%APPDATA%\directus-desktop\directus.log`
+- 或按 Windows + R，输入：`%APPDATA%\directus-desktop\`
+- 打开 `directus.log` 查看详细错误信息
+
+**步骤 2：按 F12 打开开发者工具**
+- 在启动页面按 F12
+- 查看 Console 标签中的错误信息
+- 截图并报告问题
+
+**常见问题和解决方案：**
+
+1. **端口 8055 被占用**
+   ```
+   错误信息：EADDRINUSE
+   解决方法：
+   - 打开任务管理器，结束占用 8055 端口的进程
+   - 或重启电脑
+   ```
+
+2. **缺少 SQLite 依赖**
+   ```
+   错误信息：Cannot find module 'better-sqlite3'
+   解决方法：这是打包问题，需要重新构建
+   ```
+
+3. **Node 路径问题**
+   ```
+   错误信息：'node' is not recognized
+   解决方法：这是打包配置问题
+   ```
+
+4. **权限问题**
+   ```
+   错误信息：EACCES 或 Permission denied
+   解决方法：
+   - 右键应用程序 → 以管理员身份运行
+   - 检查 %APPDATA% 目录权限
+   ```
+
 ### 构建失败
 
 **问题**：`Resource not accessible by integration` 错误
 - ✅ 已在 workflow 添加 `permissions: contents: write`
 - 如果还是报错，按照上面"设置步骤 → 2. 配置仓库权限"操作
 - 确保仓库的 Actions 有写入权限
+
+**问题**：`Cannot create symlink` 错误
+- ✅ 已修复：在 Ubuntu 阶段使用 `--dereference` 解决符号链接
+- 符号链接会被自动转换为实际文件
+- 如果还有问题，检查 tar 命令是否正确执行
 
 **问题**：阶段 1 失败（Ubuntu）
 - 检查 Docker 镜像版本是否正确
