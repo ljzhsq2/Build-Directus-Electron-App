@@ -136,9 +136,11 @@ jobs:
             ls -la directus-files/ | head -30
             echo ""
             
-            # 检查关键文件
-            echo "Looking for Directus CLI files:"
-            find directus-files -name "cli.js" -o -name "index.js" -o -name "directus" -type f 2>/dev/null | head -20
+            # 检查关键文件 - 修复：只查找根目录的 cli.js
+            echo "Looking for Directus CLI files (root level only):"
+            find directus-files -maxdepth 1 -name "cli.js" -type f 2>/dev/null || echo "  No cli.js in root"
+            find directus-files -maxdepth 2 -path "*/cli/index.js" -type f 2>/dev/null | head -5 || echo "  No cli/index.js found"
+            find directus-files -maxdepth 2 -path "*/dist/*.js" -type f 2>/dev/null | head -5 || echo "  No dist/*.js found"
             echo ""
             
             # 重命名为 directus-app
@@ -150,7 +152,7 @@ jobs:
             echo "Verification - directus-app exists:"
             ls -ld directus-app
             echo ""
-            echo "Contents of directus-app:"
+            echo "Contents of directus-app (top 30):"
             ls -la directus-app/ | head -30
             
           else
@@ -159,13 +161,14 @@ jobs:
             echo "Available files and directories:"
             ls -la
             echo ""
-            echo "Trying to list tar contents:"
+            echo "Trying to list tar contents (first 50 lines):"
             tar -tzf directus-files.tar.gz | head -50
             exit 1
           fi
           
           echo ""
           echo "=== Extraction Process Completed ==="
+
 
       - name: Verify Directus structure
         shell: bash
@@ -180,43 +183,42 @@ jobs:
           echo "✓ directus-app directory exists"
           echo ""
           
-          # 查找所有可能的入口点
+          # 查找 CLI 入口点（限制深度避免输出过多）
           echo "Searching for Directus entry points..."
           
-          # 方 查找 cli.js
-          echo "CLI files found:"
-          find directus-app -name "cli.js" -type f 2>/dev/null | while read file; do
-            echo "  ✓ $file"
-          done
+          # 检查根目录的 cli.js
+          if [ -f "directus-app/cli.js" ]; then
+            echo "  ✓ Found: directus-app/cli.js"
+          fi
           
-          # 方法2: 查找 index.js
-          echo ""
-          echo "Index files found:"
-          find directus-app -name "index.js" -type f 2>/dev/null | head -10 | while read file; do
-            echo "  • $file"
-          done
+          # 检查 cli 目录
+          if [ -d "directus-app/cli" ]; then
+            echo "  ✓ cli/ directory exists"
+            ls -la directus-app/cli/ | head -10
+          fi
           
-          # 方法3: 查找 package.json
-          echo ""
-          echo "Package.json files found:"
-          find directus-app -name "package.json" -type f 2>/dev/null | head -10 | while read file; do
-            echo "  • $file"
-          done
+          # 检查 dist 目录
+          if [ -d "directus-app/dist" ]; then
+            echo "  ✓ dist/ directory exists"
+            ls -la directus-app/dist/ | head -10
+          fi
           
-          # 方法4: 检查目录结构
-          echo ""
-          echo "Key directories:"
-          for dir in node_modules dist cli api; do
-            if [ -d "directus-app/$dir" ]; then
-              echo "  ✓ directus-app/$dir exists"
-              ls -la "directus-app/$dir" | head -10
-            else
-              echo "  ✗ directus-app/$dir NOT found"
-            fi
-          done
+          # 检查 node_modules (仅检查存在性，不列出内容)
+          if [ -d "directus-app/node_modules" ]; then
+            echo "  ✓ node_modules/ directory exists"
+            echo "    Size: $(du -sh directus-app/node_modules 2>/dev/null || echo 'unknown')"
+          fi
+          
+          # 检查 package.json
+          if [ -f "directus-app/package.json" ]; then
+            echo "  ✓ package.json exists"
+            echo "    Checking for directus info:"
+            grep -E '"name"|"version"' directus-app/package.json | head -5 || true
+          fi
           
           echo ""
           echo "=== Verification Complete ==="
+
 
       - name: Create Electron app structure
         shell: bash
@@ -306,22 +308,24 @@ jobs:
           }
 
           function findDirectusCli(directusAppPath, log) {
-            // 更全面的路径搜索
+            // 更新路径搜索顺序，将找到的路径放在前面
             const possiblePaths = [
-              // Docker 镜像可能的直接路径
-              path.join(directusAppPath, 'cli.js'),
+              // Docker 镜像中找到的路径
+              path.join(directusAppPath, 'cli.js'),  // ✓ 这个存在！
+              
+              // 其他可能的路径
               path.join(directusAppPath, 'cli', 'index.js'),
               path.join(directusAppPath, 'dist', 'cli.js'),
               path.join(directusAppPath, 'dist', 'index.js'),
               path.join(directusAppPath, 'dist', 'cli', 'index.js'),
               
-              // node_modules 中的路径
+              // node_modules 中的路径（备用）
               path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
               path.join(directusAppPath, 'node_modules', 'directus', 'cli.js'),
               path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'index.js'),
               path.join(directusAppPath, 'node_modules', '.bin', 'directus'),
               
-              // API 入口点作为备选
+              // 其他备选
               path.join(directusAppPath, 'dist', 'start.js'),
               path.join(directusAppPath, 'api', 'dist', 'index.js'),
               path.join(directusAppPath, 'index.js'),
@@ -333,43 +337,29 @@ jobs:
               if (fs.existsSync(p)) {
                 directusCliPath = p;
                 log(`✓ Found Directus CLI at: ${p}`);
-                break;
+                return directusCliPath;  // 找到后立即返回
               }
             }
             
-            // 如果上述都没找到，尝试动态搜索
+            // 如果上述都没找到，尝试有限深度的搜索
             if (!directusCliPath) {
-              log('Performing deep search for entry points...');
+              log('Standard paths not found, performing limited search...');
               try {
-                // 使用 PowerShell 在 Windows 上搜索
+                // 只在前3层目录搜索 cli.js
                 const searchCmd = process.platform === 'win32' 
-                  ? `powershell -Command "Get-ChildItem -Path '${directusAppPath}' -Recurse -Filter 'cli.js' -File -ErrorAction SilentlyContinue | Select-Object -First 5 -ExpandProperty FullName"`
-                  : `find "${directusAppPath}" -name "cli.js" -type f 2>/dev/null | head -5`;
+                  ? `powershell -Command "Get-ChildItem -Path '${directusAppPath}' -Recurse -Depth 2 -Filter 'cli.js' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName"`
+                  : `find "${directusAppPath}" -maxdepth 3 -name "cli.js" -type f 2>/dev/null | head -1`;
                 
                 log(`Search command: ${searchCmd}`);
-                const result = execSync(searchCmd, { encoding: 'utf8', timeout: 15000 });
-                const foundPaths = result.trim().split('\n').filter(p => p);
+                const result = execSync(searchCmd, { encoding: 'utf8', timeout: 10000 });
+                const foundPath = result.trim();
                 
-                if (foundPaths.length > 0) {
-                  log(`Found via search: ${foundPaths.join(', ')}`);
-                  directusCliPath = foundPaths[0];
-                } else {
-                  log('No cli.js found, searching for index.js...');
-                  const indexSearchCmd = process.platform === 'win32'
-                    ? `powershell -Command "Get-ChildItem -Path '${directusAppPath}' -Recurse -Filter 'index.js' -File -ErrorAction SilentlyContinue | Select-Object -First 5 -ExpandProperty FullName"`
-                    : `find "${directusAppPath}" -name "index.js" -type f 2>/dev/null | head -5`;
-                  
-                  const indexResult = execSync(indexSearchCmd, { encoding: 'utf8', timeout: 15000 });
-                  const indexPaths = indexResult.trim().split('\n').filter(p => p);
-                  
-                  if (indexPaths.length > 0) {
-                    log(`Found index.js files: ${indexPaths.join(', ')}`);
-                    // 优先选择包含 cli 或 dist 的路径
-                    directusCliPath = indexPaths.find(p => p.includes('cli') || p.includes('dist')) || indexPaths[0];
-                  }
+                if (foundPath && fs.existsSync(foundPath)) {
+                  log(`✓ Found via limited search: ${foundPath}`);
+                  directusCliPath = foundPath;
                 }
               } catch (e) {
-                log(`Deep search failed: ${e.message}`);
+                log(`Limited search failed: ${e.message}`);
               }
             }
             
