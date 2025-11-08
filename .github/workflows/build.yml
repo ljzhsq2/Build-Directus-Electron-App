@@ -30,10 +30,29 @@ jobs:
           docker cp directus-temp:/directus ./directus-files
           docker rm directus-temp
           
-          # 打包成 tar.gz 以便传递给下一个 job
-          tar -czf directus-files.tar.gz directus-files
+          # 解决符号链接问题：将符号链接转换为实际文件
+          echo "Resolving symlinks..."
+          cd directus-files
           
-          echo "Directus files extracted and packaged"
+          # 查找所有符号链接并替换为实际文件
+          find . -type l | while read link; do
+            target=$(readlink "$link")
+            if [ -e "$target" ]; then
+              echo "Resolving: $link -> $target"
+              rm "$link"
+              cp -r "$target" "$link" 2>/dev/null || echo "Skipped: $link"
+            else
+              echo "Broken link: $link"
+              rm "$link"
+            fi
+          done
+          
+          cd ..
+          
+          # 打包成 tar.gz（使用 --dereference 自动解引用符号链接）
+          tar --dereference -czf directus-files.tar.gz directus-files
+          
+          echo "Directus files extracted and packaged (symlinks resolved)"
       
       - name: Upload Directus files
         uses: actions/upload-artifact@v4
