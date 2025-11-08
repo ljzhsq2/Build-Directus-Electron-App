@@ -373,9 +373,7 @@ jobs:
             const logPath = path.join(userDataPath, 'directus.log');
             
             // 创建日志流
-            const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-            
-            function log(msg) {
+            const logStream = fs. { flags: 'a' }); log(msg) {
               const timestamp = new Date().toISOString();
               const logMsg = `[${timestamp}] ${msg}\n`;
               logStream.write(logMsg);
@@ -388,19 +386,12 @@ jobs:
             log(`Database path: ${dbPath}`);
             log(`Log path: ${logPath}`);
             log(`Platform: ${process.platform}`);
-            log(`Node version: ${process.version}`);
+            log(`Electron version: ${process.versions.electron}`);
+            log(`Node version: ${process.versions.node}`);
             
             // 检查 directus-app 目录是否存在
             if (!fs.existsSync(directusAppPath)) {
               log(`ERROR: Directus app directory not found: ${directusAppPath}`);
-              log('Available directories:');
-              try {
-                const parentDir = path.dirname(directusAppPath);
-                const items = fs.readdirSync(parentDir);
-                items.forEach(item => log(`  - ${item}`));
-              } catch (e) {
-                log(`Error listing parent directory: ${e.message}`);
-              }
               showErrorDialog('目录不存在', `Directus 应用目录未找到:\n${directusAppPath}`);
               return;
             }
@@ -437,7 +428,34 @@ jobs:
                 `无法找到 Directus 入口文件。\n\n请查看日志: ${logPath}`);
               return;
             }
-
+          
+            // 🔧 关键修复：使用 Node.js 而不是 Electron
+            // 获取 Electron 内置的 Node.js 路径
+            let nodePath;
+            if (app.isPackaged) {
+              // 打包后：使用 Electron 的 node.exe
+              nodePath = process.execPath.replace('Directus.exe', 'node.exe');
+              
+              // 如果 node.exe 不存在，需要从 Electron 中提取
+              if (!fs.existsSync(nodePath)) {
+                // Electron 内置的 node 在这个位置
+                const electronNodePath = path.join(process.resourcesPath, 'node.exe');
+                if (fs.existsSync(electronNodePath)) {
+                  nodePath = electronNodePath;
+                } else {
+                  // 最后的备选：使用 Electron 本身（但需要添加 --no-sandbox 参数）
+                  nodePath = process.execPath;
+                  log('WARNING: Using Electron as Node.js fallback');
+                }
+              }
+            } else {
+              // 开发模式：使用系统的 Node.js
+              nodePath = process.execPath;
+            }
+          
+            log(`Node executable: ${nodePath}`);
+            log(`Node exists: ${fs.existsSync(nodePath)}`);
+          
             // 设置环境变量
             const env = {
               ...process.env,
@@ -470,23 +488,39 @@ jobs:
               NODE_ENV: 'production',
               
               // 日志级别
-              LOG_LEVEL: 'info'
+              LOG_LEVEL: 'info',
+              
+              // 🔧 禁用 Electron 特性
+              ELECTRON_RUN_AS_NODE: '1',  // 让 Electron 作为 Node.js 运行
             };
-
+          
             log(`Environment configured, PORT: ${PORT}`);
-            log(`Spawning: "${process.execPath}" "${directusCliPath}" start`);
+            log(`Spawning: "${nodePath}" "${directusCliPath}" start`);
             log(`Working directory: ${directusAppPath}`);
-
-            // 使用 node 直接运行 Directus CLI
+          
+            // 🔧 使用正确的 Node.js 启动
             try {
-              directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
+              const spawnOptions = {
                 env: env,
                 cwd: directusAppPath,
                 stdio: ['ignore', 'pipe', 'pipe']
-              });
-
+              };
+          
+              // 如果使用 Electron 作为 Node，添加必要的参数
+              let spawnArgs;
+              if (nodePath.includes('Directus.exe') || nodePath.includes('electron.exe')) {
+                // 使用 Electron 的 Node.js 模式
+                spawnArgs = ['--no-sandbox', '--disable-gpu', directusCliPath, 'start'];
+                spawnOptions.env.ELECTRON_RUN_AS_NODE = '1';
+              } else {
+                // 使用独立的 Node.js
+                spawnArgs = [directusCliPath, 'start'];
+              }
+          
+              directusProcess = spawn(nodePath, spawnArgs, spawnOptions);
+          
               log(`✓ Process spawned with PID: ${directusProcess.pid}`);
-
+          
               directusProcess.stdout.on('data', (data) => {
                 const msg = data.toString().trim();
                 log(`[STDOUT] ${msg}`);
@@ -496,23 +530,25 @@ jobs:
                   log('✓ Directus 启动成功！');
                 }
               });
-
+          
               directusProcess.stderr.on('data', (data) => {
                 const msg = data.toString().trim();
                 // 过滤掉无害的警告
                 if (!msg.includes('DeprecationWarning') && 
                     !msg.includes('ExperimentalWarning') &&
-                    !msg.includes('punycode')) {
+                    !msg.includes('punycode') &&
+                    !msg.includes('cache_util') &&  // 忽略缓存错误
+                    !msg.includes('gpu_disk_cache')) {
                   log(`[STDERR] ${msg}`);
                 }
               });
-
+          
               directusProcess.on('error', (error) => {
                 log(`ERROR: Failed to start process: ${error.message}`);
                 log(`Error stack: ${error.stack}`);
                 showErrorDialog('启动失败', error.message);
               });
-
+          
               directusProcess.on('close', (code) => {
                 log(`Process exited with code ${code}`);
                 if (code !== 0 && code !== null) {
@@ -527,6 +563,7 @@ jobs:
               showErrorDialog('启动异常', error.message);
             }
           }
+
           
           function showErrorDialog(title, message) {
             if (mainWindow) {
