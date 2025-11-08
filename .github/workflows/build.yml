@@ -11,8 +11,39 @@ on:
         required: true
         default: '1.0.0'
 
+# 添加权限配置
+permissions:
+  contents: write  # 允许创建 Release 和上传文件
+
 jobs:
-  build:
+  extract-directus:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Extract Directus from Docker
+        run: |
+          # 拉取 Directus Docker 镜像
+          docker pull directus/directus:11.5.1
+          
+          # 创建容器并提取文件
+          docker create --name directus-temp directus/directus:11.5.1
+          docker cp directus-temp:/directus ./directus-files
+          docker rm directus-temp
+          
+          # 打包成 tar.gz 以便传递给下一个 job
+          tar -czf directus-files.tar.gz directus-files
+          
+          echo "Directus files extracted and packaged"
+      
+      - name: Upload Directus files
+        uses: actions/upload-artifact@v4
+        with:
+          name: directus-files
+          path: directus-files.tar.gz
+          retention-days: 1
+
+  build-windows:
+    needs: extract-directus
     runs-on: windows-latest
     
     steps:
@@ -24,21 +55,23 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Directus via npm
+      - name: Download Directus files
+        uses: actions/download-artifact@v4
+        with:
+          name: directus-files
+
+      - name: Extract Directus files
         shell: bash
         run: |
-          # 创建 Directus 应用目录
+          # 解压 Directus 文件
+          tar -xzf directus-files.tar.gz
+          
+          # 移动到目标目录
           mkdir -p directus-app
-          cd directus-app
+          mv directus-files/* directus-app/ || true
           
-          # 初始化 npm 项目并安装 Directus
-          npm init -y
-          npm install directus@11.5.1
-          
-          # 创建必要的目录
-          mkdir -p extensions uploads database
-          
-          echo "Directus installed successfully"
+          echo "Directus files extracted to directus-app/"
+          ls -la directus-app/
 
       - name: Create Electron app structure
         shell: bash
@@ -48,13 +81,13 @@ jobs:
           {
             "name": "directus-desktop",
             "version": "${{ github.event.inputs.version || '1.0.0' }}",
-            "description": "Directus Desktop Application",
+            "description": "Directus Desktop Application for Windows",
             "main": "main.js",
             "scripts": {
               "start": "electron .",
               "build": "electron-builder --win --x64"
             },
-            "author": "Your Name",
+            "author": "Directus Desktop",
             "license": "MIT",
             "devDependencies": {
               "electron": "^28.0.0",
@@ -64,7 +97,12 @@ jobs:
               "appId": "com.directus.desktop",
               "productName": "Directus",
               "win": {
-                "target": "nsis",
+                "target": [
+                  {
+                    "target": "nsis",
+                    "arch": ["x64"]
+                  }
+                ],
                 "icon": "icon.ico"
               },
               "files": [
@@ -77,14 +115,17 @@ jobs:
                 "!directus-app/node_modules/.bin"
               ],
               "asarUnpack": [
-                "directus-app/node_modules/**/*.node"
+                "directus-app/**/*.node",
+                "directus-app/node_modules/better-sqlite3/**/*"
               ],
               "directories": {
                 "output": "dist"
               },
               "nsis": {
                 "oneClick": false,
-                "allowToChangeInstallationDirectory": true
+                "allowToChangeInstallationDirectory": true,
+                "createDesktopShortcut": true,
+                "createStartMenuShortcut": true
               }
             }
           }
@@ -113,6 +154,7 @@ jobs:
 
           function getDirectusPath() {
             if (app.isPackaged) {
+              // 打包后的路径
               return path.join(process.resourcesPath, 'app.asar.unpacked', 'directus-app');
             }
             return path.join(__dirname, 'directus-app');
@@ -120,7 +162,8 @@ jobs:
 
           function startDirectus() {
             const directusAppPath = getDirectusPath();
-            const directusCliPath = path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js');
+            const nodeModulesPath = path.join(directusAppPath, 'node_modules');
+            const directusBin = path.join(nodeModulesPath, '.bin', 'directus.cmd');
             const userDataPath = app.getPath('userData');
             const dbPath = path.join(userDataPath, 'database', 'directus.db');
             
@@ -152,23 +195,30 @@ jobs:
               ADMIN_EMAIL: 'admin@example.com',
               ADMIN_PASSWORD: 'admin',
               
-              // 密钥（生产环境应该更安全）
-              KEY: 'directus-desktop-key-' + Date.now(),
-              SECRET: 'directus-desktop-secret-' + Date.now(),
+              // 密钥
+              KEY: 'directus-desktop-key-' + Math.random().toString(36),
+              SECRET: 'directus-desktop-secret-' + Math.random().toString(36),
               
               // 禁用遥测
               TELEMETRY: 'false',
               
+              // Node 路径
+              NODE_PATH: nodeModulesPath,
+              PATH: `${path.join(nodeModulesPath, '.bin')};${process.env.PATH}`,
+              
               NODE_ENV: 'production'
             };
 
-            console.log('Starting Directus from:', directusCliPath);
+            console.log('Starting Directus from:', directusBin);
             console.log('Database location:', dbPath);
+            console.log('App path:', directusAppPath);
 
-            directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
+            // Windows 使用 cmd 来执行
+            directusProcess = spawn('cmd', ['/c', directusBin, 'start'], {
               env: env,
               cwd: directusAppPath,
-              stdio: ['ignore', 'pipe', 'pipe']
+              stdio: ['ignore', 'pipe', 'pipe'],
+              shell: true
             });
 
             directusProcess.stdout.on('data', (data) => {
@@ -176,7 +226,11 @@ jobs:
             });
 
             directusProcess.stderr.on('data', (data) => {
-              console.error(`[Directus Error] ${data.toString().trim()}`);
+              const msg = data.toString().trim();
+              // 只记录真正的错误，忽略警告
+              if (!msg.includes('DeprecationWarning')) {
+                console.error(`[Directus] ${msg}`);
+              }
             });
 
             directusProcess.on('error', (error) => {
@@ -197,36 +251,45 @@ jobs:
                 contextIsolation: true,
                 preload: path.join(__dirname, 'preload.js')
               },
-              icon: path.join(__dirname, 'icon.ico')
+              icon: path.join(__dirname, 'icon.ico'),
+              show: false
             });
 
             // 显示加载页面
-            mainWindow.loadURL(`data:text/html,
+            mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
               <html>
-                <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Arial,sans-serif;background:#f0f0f0;">
-                  <div style="text-align:center;">
-                    <h1>🚀 Directus 启动中...</h1>
-                    <p>请稍候，首次启动可能需要几秒钟</p>
-                    <div style="margin-top:20px;">
-                      <div style="width:200px;height:4px;background:#ddd;border-radius:2px;overflow:hidden;">
-                        <div style="width:100%;height:100%;background:linear-gradient(90deg,#6644ff,#00bcd4);animation:slide 1.5s infinite;"></div>
-                      </div>
+                <head>
+                  <meta charset="utf-8">
+                  <title>Directus 启动中</title>
+                </head>
+                <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);">
+                  <div style="text-align:center;color:white;">
+                    <div style="font-size:64px;margin-bottom:20px;">🚀</div>
+                    <h1 style="font-size:32px;font-weight:600;margin:0 0 10px 0;">Directus 启动中</h1>
+                    <p style="font-size:16px;opacity:0.9;margin:0 0 30px 0;">请稍候，首次启动可能需要 10-15 秒</p>
+                    <div style="width:300px;height:4px;background:rgba(255,255,255,0.3);border-radius:2px;overflow:hidden;margin:0 auto;">
+                      <div style="width:100%;height:100%;background:white;animation:slide 1.5s ease-in-out infinite;"></div>
                     </div>
                     <style>
                       @keyframes slide {
                         0% { transform: translateX(-100%); }
+                        50% { transform: translateX(0); }
                         100% { transform: translateX(100%); }
                       }
                     </style>
                   </div>
                 </body>
               </html>
-            `);
+            `)}`);
 
-            // 等待 Directus 启动后加载实际页面
+            mainWindow.once('ready-to-show', () => {
+              mainWindow.show();
+            });
+
+            // 等待 Directus 启动
             setTimeout(() => {
               checkDirectusReady();
-            }, 8000);
+            }, 10000);
 
             mainWindow.on('closed', () => {
               mainWindow = null;
@@ -239,7 +302,12 @@ jobs:
             });
           }
 
-          function checkDirectusReady() {
+          function checkDirectusReady(attempts = 0) {
+            if (attempts > 30) {
+              console.error('Directus failed to start after 30 attempts');
+              return;
+            }
+
             const http = require('http');
             
             const options = {
@@ -251,20 +319,25 @@ jobs:
             };
 
             const req = http.request(options, (res) => {
-              if (res.statusCode === 200 || res.statusCode === 302) {
-                mainWindow.loadURL(`http://localhost:${PORT}/admin`);
+              if (res.statusCode === 200 || res.statusCode === 302 || res.statusCode === 307) {
+                console.log('Directus is ready!');
+                if (mainWindow) {
+                  mainWindow.loadURL(`http://localhost:${PORT}/admin`);
+                }
               } else {
-                setTimeout(checkDirectusReady, 2000);
+                console.log(`Directus not ready yet (status: ${res.statusCode}), retrying...`);
+                setTimeout(() => checkDirectusReady(attempts + 1), 2000);
               }
             });
 
-            req.on('error', () => {
-              setTimeout(checkDirectusReady, 2000);
+            req.on('error', (err) => {
+              console.log(`Connection error (attempt ${attempts + 1}):`, err.message);
+              setTimeout(() => checkDirectusReady(attempts + 1), 2000);
             });
 
             req.on('timeout', () => {
               req.destroy();
-              setTimeout(checkDirectusReady, 2000);
+              setTimeout(() => checkDirectusReady(attempts + 1), 2000);
             });
 
             req.end();
@@ -281,7 +354,7 @@ jobs:
 
           app.on('ready', () => {
             startDirectus();
-            createWindow();
+            setTimeout(createWindow, 2000);
           });
 
           app.on('window-all-closed', () => {
@@ -301,14 +374,19 @@ jobs:
 
           app.on('before-quit', () => {
             if (directusProcess) {
-              directusProcess.kill();
+              directusProcess.kill('SIGTERM');
+              setTimeout(() => {
+                if (directusProcess && !directusProcess.killed) {
+                  directusProcess.kill('SIGKILL');
+                }
+              }, 1000);
             }
           });
           EOF
 
           echo "Electron app structure created"
 
-      - name: Install dependencies
+      - name: Install Electron dependencies
         run: npm install
 
       - name: Build Electron app
@@ -328,20 +406,30 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
-      - name: Rename installer
+      - name: List build output
+        shell: bash
+        run: |
+          echo "Build output files:"
+          ls -lh dist/
+
+      - name: Rename and prepare installer
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cd dist
-          # 找到生成的安装包并重命名
-          for file in *.exe; do
-            if [ -f "$file" ]; then
-              NEW_NAME="Directus-Desktop-${VERSION}-Setup.exe"
-              mv "$file" "$NEW_NAME"
-              echo "Renamed to: $NEW_NAME"
-              echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT
-            fi
-          done
+          
+          # 找到生成的 exe 安装包
+          INSTALLER_FILE=$(find . -maxdepth 1 -name "*.exe" -type f | head -n 1)
+          
+          if [ -n "$INSTALLER_FILE" ]; then
+            NEW_NAME="Directus-Desktop-${VERSION}-Windows-x64-Setup.exe"
+            mv "$INSTALLER_FILE" "$NEW_NAME"
+            echo "✅ Renamed installer to: $NEW_NAME"
+            echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "❌ No installer file found!"
+            exit 1
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -351,28 +439,67 @@ jobs:
           body: |
             ## 🎉 Directus Desktop v${{ steps.version.outputs.version }}
             
-            ### 📦 安装说明
-            1. 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Setup.exe`
-            2. 运行安装程序
-            3. 首次启动等待几秒钟初始化
-            4. 默认管理员账号：
-               - 邮箱：`admin@example.com`
-               - 密码：`admin`
+            基于 **Directus 11.5.1** 的 Windows 桌面版本
+            
+            ### 📥 下载与安装
+            
+            1. ⬇️ 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe`
+            2. 🖱️ 双击运行安装程序
+            3. ⏱️ 首次启动等待 10-15 秒初始化数据库
+            4. 🎊 开始使用！
+            
+            ### 🔐 默认管理员账号
+            
+            首次访问时使用以下账号登录：
+            - **邮箱**：`admin@example.com`
+            - **密码**：`admin`
+            
+            ⚠️ **重要**：登录后请立即修改密码！
             
             ### ✨ 功能特性
-            - ✅ 内置 Directus 11.5.1
-            - ✅ 使用 SQLite 数据库
-            - ✅ 数据存储在用户目录
-            - ✅ 无需配置，开箱即用
             
-            ### 📂 数据位置
-            - Windows: `%APPDATA%\directus-desktop\database\`
+            - ✅ 完整的 Directus CMS 功能
+            - ✅ 内置 SQLite 数据库（无需额外配置）
+            - ✅ 数据自动保存到用户目录
+            - ✅ 支持文件上传和管理
+            - ✅ 完全离线可用
+            - ✅ 一键启动，开箱即用
+            
+            ### 📂 数据存储位置
+            
+            所有数据保存在：
+            ```
+            C:\Users\<你的用户名>\AppData\Roaming\directus-desktop\
+            ├── database\
+            │   └── directus.db      (数据库文件)
+            ├── uploads\             (上传的文件)
+            └── extensions\          (扩展插件)
+            ```
+            
+            ### 💡 使用提示
+            
+            - 访问地址：`http://localhost:8055/admin`
+            - 可以多开（会自动使用不同端口）
+            - 关闭窗口即停止服务
+            - 卸载不会删除数据，需手动删除上述目录
+            
+            ### 🐛 遇到问题？
+            
+            - 如果启动失败，检查端口 8055 是否被占用
+            - 如果忘记密码，可以删除数据库文件重新初始化
+            - 更多问题请提交 Issue
             
             ---
-            基于 Directus 11.5.1 构建
+            
+            📦 **文件信息**
+            - 版本：v${{ steps.version.outputs.version }}
+            - Directus 版本：11.5.1
+            - 架构：Windows x64
+            - 安装包大小：~150MB
+            - 安装后大小：~300MB
           draft: false
           prerelease: false
           files: |
-            dist/Directus-Desktop-${{ steps.version.outputs.version }}-Setup.exe
+            dist/Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
