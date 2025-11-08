@@ -3,7 +3,7 @@ name: Build Directus Electron App
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*' # 当 v 开头的 tag 被推送时触发
   workflow_dispatch:
     inputs:
       version:
@@ -13,7 +13,7 @@ on:
 
 # 添加权限配置
 permissions:
-  contents: write  # 允许创建 Release 和上传文件
+  contents: write # 允许创建 Release 和上传文件
 
 jobs:
   extract-directus:
@@ -32,35 +32,12 @@ jobs:
           
           echo "=== Extracted Directus directory structure ==="
           ls -la directus-files/
-          echo ""
-          echo "=== Looking for CLI entry points ==="
-          find directus-files -name "cli.js" -o -name "index.js" | head -20
-          echo ""
-          
-          # 解决符号链接问题：将符号链接转换为实际文件
-          echo "Resolving symlinks..."
-          cd directus-files
-          
-          # 查找所有符号链接并替换为实际文件
-          find . -type l | while read link; do
-            target=$(readlink "$link")
-            if [ -e "$target" ]; then
-              echo "Resolving: $link -> $target"
-              rm "$link"
-              cp -r "$target" "$link" 2>/dev/null || echo "Skipped: $link"
-            else
-              echo "Broken link: $link"
-              rm "$link"
-            fi
-          done
-          
-          cd ..
           
           # 打包成 tar.gz（使用 --dereference 自动解引用符号链接）
           tar --dereference -czf directus-files.tar.gz directus-files
           
           echo "Directus files extracted and packaged (symlinks resolved)"
-      
+    
       - name: Upload Directus files
         uses: actions/upload-artifact@v4
         with:
@@ -89,19 +66,33 @@ jobs:
       - name: Extract Directus files
         shell: bash
         run: |
-          # 解压 Directus 文件（Windows 会自动忽略符号链接）
           tar -xzf directus-files.tar.gz
-          
-          # 移动到目标目录
           mkdir -p directus-app
           if [ -d "directus-files" ]; then
             mv directus-files/* directus-app/ 2>/dev/null || true
             mv directus-files/.* directus-app/ 2>/dev/null || true
           fi
-          
           echo "Directus files extracted to directus-app/"
-          echo "Directory contents:"
           ls -la directus-app/ | head -20
+
+      # ⬇️ ⬇️ ⬇️ 修复 1：为 Directus 应用本身安装依赖 ⬇️ ⬇️ ⬇️
+      - name: Install Directus app dependencies
+        shell: bash
+        run: |
+          cd directus-app
+          if [ -f "package.json" ]; then
+            echo "✅ Found package.json, installing Directus dependencies..."
+            # 使用 --production 来减少体积
+            # 使用 --ignore-scripts 避免不必要的构建
+            # 使用 --legacy-peer-deps 解决可能的版本冲突
+            npm install --production --ignore-scripts --legacy-peer-deps
+          else
+            echo "❌ ERROR: No package.json found in directus-app/ !"
+            echo "Cannot install Directus dependencies."
+            exit 1
+          fi
+          cd ..
+      # ⬆️ ⬆️ ⬆️ 修复 1 结束 ⬆️ ⬆️ ⬆️
 
       - name: Create Electron app structure
         shell: bash
@@ -144,9 +135,13 @@ jobs:
                 "!directus-app/node_modules/**/*.d.ts",
                 "!directus-app/node_modules/.bin"
               ],
+              
+              # ⬇️ ⬇️ ⬇️ 修复 2：修改 asarUnpack 规则 ⬇️ ⬇️ ⬇️
               "asarUnpack": [
                 "directus-app/**/*"
               ],
+              # ⬆️ ⬆️ ⬆️ 修复 2 结束 ⬆️ ⬆️ ⬆️
+
               "directories": {
                 "output": "dist"
               },
@@ -219,14 +214,12 @@ jobs:
               log(`Created database directory: ${dbDir}`);
             }
             
-            // Docker 镜像中的 Directus 可能在不同位置
             // 查找可能的 CLI 入口点
             const possiblePaths = [
-              path.join(directusAppPath, 'cli.js'),           // Docker 镜像可能的位置
+              path.join(directusAppPath, 'cli.js'),                 // Docker 镜像可能的位置
               path.join(directusAppPath, 'dist', 'cli.js'),
-              path.join(directusAppPath, 'dist', 'index.js'),
-              path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
-              path.join(directusAppPath, 'node_modules', '.bin', 'directus'),
+              path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'), // npm 安装的位置
+              path.join(directusAppPath, 'dist', 'index.js')
             ];
             
             let directusCliPath = null;
@@ -241,10 +234,16 @@ jobs:
             
             if (!directusCliPath) {
               log('ERROR: Could not find Directus CLI in any expected location');
-              log('Directory contents:');
+              log('Directory contents (first 20):');
               try {
                 const files = fs.readdirSync(directusAppPath);
                 files.slice(0, 20).forEach(f => log(`  - ${f}`));
+                // 检查 node_modules/directus
+                const directusModulePath = path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli');
+                if (fs.existsSync(directusModulePath)) {
+                   log(`node_modules/directus/dist/cli contents:`);
+                   fs.readdirSync(directusModulePath).slice(0, 10).forEach(f => log(`  - ${f}`));
+                }
               } catch (e) {
                 log(`Error reading directory: ${e.message}`);
               }
@@ -294,7 +293,7 @@ jobs:
             // 使用 node 直接运行 Directus CLI
             directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
               env: env,
-              cwd: directusAppPath,
+              cwd: directusAppPath, // 设置工作目录为 directus-app 目录
               stdio: ['ignore', 'pipe', 'pipe']
             });
 
@@ -371,39 +370,13 @@ jobs:
                     <div id="logs" style="margin-top:30px;padding:15px;background:rgba(0,0,0,0.3);border-radius:8px;max-height:200px;overflow-y:auto;text-align:left;font-size:12px;font-family:monospace;line-height:1.6;">
                       <div>正在初始化...</div>
                     </div>
-                    <button onclick="showLogs()" style="margin-top:20px;padding:10px 20px;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.3);color:white;border-radius:5px;cursor:pointer;font-size:14px;">
-                      查看详细日志
-                    </button>
                     <style>
                       @keyframes slide {
                         0% { transform: translateX(-100%); }
                         50% { transform: translateX(0); }
                         100% { transform: translateX(100%); }
                       }
-                      button:hover {
-                        background:rgba(255,255,255,0.3);
-                      }
                     </style>
-                    <script>
-                      let logInterval;
-                      window.addEventListener('load', function() {
-                        // 模拟日志更新（实际应用中应该从主进程获取）
-                        const logs = document.getElementById('logs');
-                        let dots = 0;
-                        logInterval = setInterval(function() {
-                          dots = (dots + 1) % 4;
-                          logs.innerHTML = '<div>正在初始化数据库' + '.'.repeat(dots) + '</div>';
-                        }, 500);
-                      });
-                      
-                      function showLogs() {
-                        if (window.electronAPI) {
-                          window.electronAPI.openExternal('file://' + window.electronAPI.getAppPath() + '/directus.log');
-                        } else {
-                          alert('日志文件位置: ' + (navigator.platform.includes('Win') ? '%APPDATA%' : '~') + '/directus-desktop/directus.log');
-                        }
-                      }
-                    </script>
                   </div>
                 </body>
               </html>
@@ -489,51 +462,71 @@ jobs:
           ipcMain.handle('open-external', (event, url) => {
             shell.openExternal(url);
           });
+          
+          # ⬇️ ⬇️ ⬇️ 修复 3：添加单例锁，防止多开 ⬇️ ⬇️ ⬇️
+          const gotTheLock = app.requestSingleInstanceLock();
 
-          app.on('ready', () => {
-            startDirectus();
-            setTimeout(createWindow, 2000);
-            
-            // 添加开发者工具快捷键 F12
-            const { globalShortcut } = require('electron');
-            globalShortcut.register('F12', () => {
+          if (!gotTheLock) {
+            // 如果获取锁失败，说明已有实例在运行，立即退出新实例
+            app.quit();
+          } else {
+            app.on('second-instance', (event, commandLine, workingDirectory) => {
+              // 当用户尝试运行第二个实例时，我们聚焦到已有的窗口
               if (mainWindow) {
-                mainWindow.webContents.toggleDevTools();
+                if (mainWindow.isMinimized()) mainWindow.restore();
+                mainWindow.focus();
               }
             });
-          });
 
-          app.on('window-all-closed', () => {
-            if (directusProcess) {
-              directusProcess.kill();
-            }
-            if (process.platform !== 'darwin') {
-              app.quit();
-            }
-          });
-
-          app.on('activate', () => {
-            if (mainWindow === null) {
-              createWindow();
-            }
-          });
-
-          app.on('before-quit', () => {
-            if (directusProcess) {
-              directusProcess.kill('SIGTERM');
-              setTimeout(() => {
-                if (directusProcess && !directusProcess.killed) {
-                  directusProcess.kill('SIGKILL');
+            // 只有获取锁成功的实例才继续执行
+            app.on('ready', () => {
+              startDirectus();
+              setTimeout(createWindow, 2000);
+              
+              // 添加开发者工具快捷键 F12
+              const { globalShortcut } = require('electron');
+              globalShortcut.register('F12', () => {
+                if (mainWindow) {
+                  mainWindow.webContents.toggleDevTools();
                 }
-              }, 1000);
-            }
-          });
+              });
+            });
+
+            app.on('window-all-closed', () => {
+              if (directusProcess) {
+                directusProcess.kill();
+              }
+              if (process.platform !== 'darwin') {
+                app.quit();
+              }
+            });
+
+            app.on('activate', () => {
+              if (mainWindow === null) {
+                createWindow();
+              }
+            });
+
+            app.on('before-quit', () => {
+              if (directusProcess) {
+                directusProcess.kill('SIGTERM');
+                setTimeout(() => {
+                  if (directusProcess && !directusProcess.killed) {
+                    directusProcess.kill('SIGKILL');
+                  }
+                }, 1000);
+              }
+            });
+            
+          } // ⬅️ 修复 3：单例锁 'else' 块的闭合括号
+          # ⬆️ ⬆️ ⬆️ 修复 3 结束 ⬆️ ⬆️ ⬆️
+
           EOF
 
           echo "Electron app structure created"
 
       - name: Install Electron dependencies
-        run: npm install
+        run: npm install # 这个 npm install 只安装根目录的 electron 和 electron-builder
 
       - name: Build Electron app
         env:
@@ -559,6 +552,7 @@ jobs:
           ls -lh dist/
 
       - name: Rename and prepare installer
+        id: rename # 给这个步骤一个 id
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -571,7 +565,7 @@ jobs:
             NEW_NAME="Directus-Desktop-${VERSION}-Windows-x64-Setup.exe"
             mv "$INSTALLER_FILE" "$NEW_NAME"
             echo "✅ Renamed installer to: $NEW_NAME"
-            echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT
+            echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT # 输出文件名
           else
             echo "❌ No installer file found!"
             exit 1
@@ -617,15 +611,14 @@ jobs:
             ```
             C:\Users\<你的用户名>\AppData\Roaming\directus-desktop\
             ├── database\
-            │   └── directus.db      (数据库文件)
-            ├── uploads\             (上传的文件)
-            └── extensions\          (扩展插件)
+            │   └── directus.db     (数据库文件)
+            ├── uploads\            (上传的文件)
+            └── extensions\         (扩展插件)
             ```
             
             ### 💡 使用提示
             
             - 访问地址：`http://localhost:8055/admin`
-            - 可以多开（会自动使用不同端口）
             - 关闭窗口即停止服务
             - 卸载不会删除数据，需手动删除上述目录
             
@@ -641,11 +634,9 @@ jobs:
             - 版本：v${{ steps.version.outputs.version }}
             - Directus 版本：11.5.1
             - 架构：Windows x64
-            - 安装包大小：~150MB
-            - 安装后大小：~300MB
           draft: false
           prerelease: false
           files: |
-            dist/Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe
+            dist/${{ steps.rename.outputs.installer_name }} # 使用上一步的输出
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
