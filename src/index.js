@@ -23,14 +23,34 @@ let deeplinkingUrl;
 
 const prepareDirectus = async () => {
   const config = require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
-  if (config.parsed.DB_FILENAME) process.env.DB_FILENAME = path.resolve(__dirname, '../', config.parsed.DB_FILENAME);
-  if (config.parsed.EXTENSIONS_PATH) process.env.EXTENSIONS_PATH = path.resolve(__dirname, '../', config.parsed.EXTENSIONS_PATH);
-  if (config.parsed.STORAGE_LOCAL_ROOT) process.env.STORAGE_LOCAL_ROOT = path.resolve(__dirname, '../', config.parsed.STORAGE_LOCAL_ROOT);
-  if (config.parsed.PACKAGE_FILE_LOCATION) process.env.PACKAGE_FILE_LOCATION = path.resolve(__dirname, '../', config.parsed.PACKAGE_FILE_LOCATION);
-  if (app.isPackaged) process.env.LOG_LEVEL = 'silent';
 
-  // For Directus 11.x, we need to import the server differently
-  return await import('directus');
+  // Set up environment variables with absolute paths
+  if (config.parsed) {
+    if (config.parsed.DB_FILENAME) {
+      process.env.DB_FILENAME = path.resolve(__dirname, '../', config.parsed.DB_FILENAME);
+    }
+    if (config.parsed.EXTENSIONS_PATH) {
+      process.env.EXTENSIONS_PATH = path.resolve(__dirname, '../', config.parsed.EXTENSIONS_PATH);
+    }
+    if (config.parsed.STORAGE_LOCAL_ROOT) {
+      process.env.STORAGE_LOCAL_ROOT = path.resolve(__dirname, '../', config.parsed.STORAGE_LOCAL_ROOT);
+    }
+
+    // Copy all other env vars
+    Object.keys(config.parsed).forEach(key => {
+      if (!process.env[key]) {
+        process.env[key] = config.parsed[key];
+      }
+    });
+  }
+
+  if (app.isPackaged) {
+    process.env.LOG_LEVEL = 'silent';
+  }
+
+  // Import and start Directus server (for Directus 11.x)
+  const { createServer } = await import('directus');
+  return createServer();
 };
 
 const createWindow = async () => {
@@ -79,22 +99,23 @@ const createWindow = async () => {
 
   // Start Directus server
   try {
-    const directusModule = await prepareDirectus();
+    console.log('Starting Directus server...');
+    const server = await prepareDirectus();
 
-    // For Directus 11.x, we need to use the createDirectus API
-    // This is a simplified version - you may need to adjust based on Directus 11.x API
-    if (directusModule.startServer) {
-      await directusModule.startServer();
-    }
+    // Start the server
+    await server.listen();
+
+    console.log('Directus server started successfully on port 8055');
   } catch (error) {
     console.error('Failed to start Directus server:', error);
+    dialog.showErrorBox('Directus Error', `Failed to start Directus server: ${error.message}`);
   }
 
-  // Wait for Directus to be ready
+  // Wait a bit for Directus to be fully ready
   await new Promise((resolve) => {
     setTimeout(() => {
       resolve();
-    }, 10000);
+    }, 5000);
   });
 
   mainWindow.loadURL('http://localhost:8055');

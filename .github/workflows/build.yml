@@ -18,15 +18,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.18.0'
+          node-version: '22.12.0'
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: pnpm install --no-frozen-lockfile
 
       - name: Generate unique keys
         shell: pwsh
@@ -38,7 +43,7 @@ jobs:
           Get-Content .env
 
       - name: Build Electron app
-        run: npm run make
+        run: pnpm run make
 
       - name: List output files
         shell: pwsh

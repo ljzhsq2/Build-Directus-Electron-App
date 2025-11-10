@@ -3,6 +3,7 @@
   "version": "11.5.1",
   "description": "Directus 11.5.1 Electron App - Offline Desktop Application",
   "main": "src/index.js",
+  "packageManager": "pnpm@9.15.0",
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
@@ -31,10 +32,8 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.5.0",
-    "@electron-forge/maker-deb": "^7.5.0",
-    "@electron-forge/maker-rpm": "^7.5.0",
     "@electron-forge/maker-squirrel": "^7.5.0",
     "@electron-forge/maker-zip": "^7.5.0",
-    "electron": "^32.2.5"
+    "electron": "^33.2.0"
   }
 }
