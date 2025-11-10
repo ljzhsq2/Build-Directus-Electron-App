@@ -277,21 +277,27 @@ function startDirectus() {
     CACHE_TTL: '10m'
   };
 
-  // 移除可能导致冲突的 Electron 环境变量
-  delete env.ELECTRON_RUN_AS_NODE;
-
-  log(`Starting Directus: node "${directusCliPath}" start`);
+  log(`Starting Directus via wrapper: "${directusCliPath}"`);
   log(`Working directory: ${directusAppPath}`);
 
-  // 使用 Electron 的 node 运行 Directus
-  // 使用 --experimental-loader 或直接运行，Node.js 会根据 package.json 的 type 判断
-  const args = [directusCliPath, 'start'];
+  // 使用 wrapper 来启动 Directus
+  // wrapper 是一个 .mjs 文件，需要 ELECTRON_RUN_AS_NODE=1 才能作为 ES Module 加载
+  const args = [directusCliPath];
+
+  log('Environment configuration:');
+  log(`  ELECTRON_RUN_AS_NODE: 1 (enables ES Module support)`);
+  log(`  PORT: ${env.PORT}`);
+  log(`  DB_CLIENT: ${env.DB_CLIENT}`);
+  log(`  DB_FILENAME: ${env.DB_FILENAME}`);
 
   directusProcess = spawn(process.execPath, args, {
-    env: env,
+    env: {
+      ...env,
+      ELECTRON_RUN_AS_NODE: '1'  // 让 Electron 以 Node.js 模式运行 wrapper
+    },
     cwd: directusAppPath,
     stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true  // Windows 上隐藏控制台窗口
+    windowsHide: true
   });
 
   directusProcess.stdout.on('data', (data) => {

@@ -57,6 +57,27 @@ jobs:
             fi
           fi
 
+          echo "=== Disable Directus Singleton Check ==="
+          # 查找并禁用 Directus CLI 的单实例检测
+          # 通常在 cli.js 或 dist/cli/index.js 中
+          for file in directus-app/cli.js directus-app/dist/cli.js directus-app/dist/cli/index.js directus-app/dist/cli/run.js; do
+            if [ -f "$file" ]; then
+              echo "Checking $file for singleton detection..."
+              # 查找常见的单实例检测模式并注释掉
+              # 模式1: app.requestSingleInstanceLock()
+              # 模式2: 检查锁文件
+              # 模式3: 进程检测
+              sed -i 's/process\.exit(1);.*singleton/\/\/ process.exit(1); \/\/ Disabled singleton check/gi' "$file" 2>/dev/null || true
+              sed -i 's/process\.exit(0);.*instance.*running/\/\/ process.exit(0); \/\/ Disabled singleton check/gi' "$file" 2>/dev/null || true
+              sed -i 's/console\.log.*Another instance.*running/\/\/ Disabled singleton warning/gi' "$file" 2>/dev/null || true
+              echo "  ✓ Processed $file"
+            fi
+          done
+
+          # 搜索包含 "instance" 和 "running" 的文件
+          echo "Searching for singleton detection code..."
+          grep -r "Another instance" directus-app/ 2>/dev/null | head -5 || echo "  No obvious singleton messages found"
+
           echo "=== Packaging ==="
           tar -czf directus-files.tar.gz directus-app
 
