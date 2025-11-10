@@ -1,345 +1,90 @@
-name: Build Directus Desktop 11.5.1 (NSIS)
+name: Build Directus Electron App
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version number (e.g., 2.0.0)'
-        required: true
-        default: '2.0.0'
-
-permissions:
-  contents: write
 
 jobs:
-  build-windows:
+  build:
+    name: Build Windows App
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Download portable Node.js
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate unique keys
         shell: pwsh
         run: |
-          Write-Host "================================================"
-          Write-Host "  Downloading Portable Node.js 20.x"
-          Write-Host "================================================"
-          Write-Host ""
+          $key = -join ((48..57) + (97..102) | Get-Random -Count 64 | % {[char]$_})
+          $secret = -join ((48..57) + (97..102) | Get-Random -Count 64 | % {[char]$_})
+          Add-Content -Path .env -Value "KEY=$key"
+          Add-Content -Path .env -Value "SECRET=$secret"
+          Get-Content .env
 
-          $NODE_VERSION = "20.11.0"
-          $NODE_URL = "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-win-x64.zip"
+      - name: Build Electron app
+        run: npm run make
 
-          Write-Host "Downloading from: $NODE_URL"
-          Invoke-WebRequest -Uri $NODE_URL -OutFile "node-portable.zip"
-
-          Write-Host "Extracting..."
-          Expand-Archive -Path "node-portable.zip" -DestinationPath "." -Force
-
-          Write-Host "Renaming directory..."
-          Rename-Item -Path "node-v$NODE_VERSION-win-x64" -NewName "node-portable"
-
-          Write-Host ""
-          Write-Host "✓ Portable Node.js ready"
-          Write-Host "  Location: $(Get-Location)\node-portable"
-          Write-Host "  Node version:"
-          & .\node-portable\node.exe --version
-
-      - name: Install Directus 11.5.1
+      - name: List output files
         shell: pwsh
         run: |
-          Write-Host "================================================"
-          Write-Host "  Installing Directus 11.5.1"
-          Write-Host "================================================"
-          Write-Host ""
+          Write-Host "Build output:"
+          Get-ChildItem -Path out -Recurse
 
-          cd directus-app
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: directus-electron-windows
+          path: |
+            out/make/**/*.exe
+            out/make/**/*.zip
+          retention-days: 30
 
-          Write-Host "Running: npm install --production"
-          npm install --production --no-optional
+  release:
+    name: Create Release
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
 
-          Write-Host ""
-          Write-Host "✓ Directus 11.5.1 installed"
-          Write-Host ""
-          Write-Host "Verification:"
+    permissions:
+      contents: write
 
-          if (Test-Path "node_modules\directus\cli.js") {
-            Write-Host "  ✓ Directus CLI found"
-          } else {
-            Write-Host "  ✗ Directus CLI NOT FOUND!"
-            exit 1
-          }
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          Write-Host ""
-          Write-Host "Directory size:"
-          $size = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          Write-Host "  $([math]::Round($size, 2)) MB"
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: directus-electron-windows
+          path: ./artifacts
 
-      - name: Prepare build structure
+      - name: Display structure of downloaded files
         shell: pwsh
-        run: |
-          Write-Host "================================================"
-          Write-Host "  Preparing Build Structure"
-          Write-Host "================================================"
-          Write-Host ""
-
-          # 创建 runtime 目录
-          New-Item -ItemType Directory -Force -Path "installer\runtime" | Out-Null
-          New-Item -ItemType Directory -Force -Path "installer\runtime\directus" | Out-Null
-
-          Write-Host "Copying Node.js runtime..."
-          Copy-Item "node-portable\node.exe" "installer\runtime\node.exe"
-
-          Write-Host "Copying Directus files..."
-          Copy-Item -Path "directus-app\*" -Destination "installer\runtime\directus" -Recurse -Force
-
-          Write-Host ""
-          Write-Host "✓ Build structure ready"
-          Write-Host ""
-          Write-Host "Structure:"
-          Get-ChildItem "installer\runtime" | ForEach-Object { Write-Host "  - $($_.Name)" }
-
-      - name: Create default icon
-        shell: pwsh
-        run: |
-          Write-Host "================================================"
-          Write-Host "  Creating Icon"
-          Write-Host "================================================"
-          Write-Host ""
-
-          # 方案1: 尝试下载 Directus 图标
-          try {
-            $iconUrl = "https://raw.githubusercontent.com/directus/directus/main/app/public/favicon.ico"
-            Write-Host "Downloading Directus favicon..."
-            Invoke-WebRequest -Uri $iconUrl -OutFile "installer\icon.ico" -ErrorAction Stop
-
-            $iconSize = (Get-Item "installer\icon.ico").Length
-            if ($iconSize -gt 0) {
-              Write-Host "✓ Icon downloaded successfully ($iconSize bytes)"
-              return
-            } else {
-              Remove-Item "installer\icon.ico" -Force -ErrorAction SilentlyContinue
-            }
-          } catch {
-            Write-Host "⚠ Could not download icon: $($_.Exception.Message)"
-          }
-
-          # 方案2: 使用 PowerShell 创建一个简单的 ICO 文件
-          Write-Host "Creating a basic icon using PowerShell..."
-
-          # ICO 文件的最小结构（16x16 单色图标）
-          $iconBytes = @(
-            0x00, 0x00,       # Reserved
-            0x01, 0x00,       # Type (1 = ICO)
-            0x01, 0x00,       # Count (1 image)
-            0x10,             # Width (16)
-            0x10,             # Height (16)
-            0x00,             # Color count (0 = >256)
-            0x00,             # Reserved
-            0x01, 0x00,       # Color planes
-            0x20, 0x00,       # Bits per pixel (32)
-            0x68, 0x04, 0x00, 0x00,  # Image size
-            0x16, 0x00, 0x00, 0x00   # Image offset
-          )
-
-          # 添加图像数据（简单的蓝色图标）
-          $imageData = New-Object byte[] 1128
-          for ($i = 0; $i -lt 256; $i++) {
-            $imageData[$i*4] = 0xFF     # Blue
-            $imageData[$i*4+1] = 0x00   # Green
-            $imageData[$i*4+2] = 0x00   # Red
-            $imageData[$i*4+3] = 0xFF   # Alpha
-          }
-
-          [System.IO.File]::WriteAllBytes("$(Get-Location)\installer\icon.ico", $iconBytes + $imageData)
-
-          Write-Host "✓ Basic icon created"
-
-      - name: Install NSIS
-        shell: pwsh
-        run: |
-          Write-Host "================================================"
-          Write-Host "  Installing NSIS"
-          Write-Host "================================================"
-          Write-Host ""
-
-          choco install nsis -y
-
-          # 刷新环境变量
-          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-          Write-Host ""
-          Write-Host "✓ NSIS installed"
-          Write-Host ""
-
-          # 显示 NSIS 版本
-          & "C:\Program Files (x86)\NSIS\makensis.exe" /VERSION
-
-      - name: Get version
-        id: version
-        shell: pwsh
-        run: |
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $VERSION = "${{ github.ref_name }}".TrimStart("v")
-          } else {
-            $VERSION = "${{ github.event.inputs.version }}"
-          }
-
-          Write-Host "Version: $VERSION"
-          "version=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Build installer with NSIS
-        shell: pwsh
-        run: |
-          Write-Host "================================================"
-          Write-Host "  Building Installer"
-          Write-Host "================================================"
-          Write-Host ""
-
-          $VERSION = "${{ steps.version.outputs.version }}"
-          Write-Host "Building version: $VERSION"
-
-          cd installer
-
-          # 替换版本号
-          $nsiContent = Get-Content "installer.nsi" -Raw
-          $nsiContent = $nsiContent -replace "VERSION_PLACEHOLDER", $VERSION
-          $nsiContent | Set-Content "installer.nsi"
-
-          Write-Host ""
-          Write-Host "Running NSIS..."
-
-          # 使用完整路径调用 makensis
-          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          & $makensis installer.nsi
-
-          Write-Host ""
-          Write-Host "✓ Installer built successfully"
-
-          # 显示生成的文件
-          Get-ChildItem "Directus-Desktop-Setup-*.exe" | ForEach-Object {
-            $sizeInMB = [math]::Round($_.Length / 1MB, 2)
-            Write-Host "  $($_.Name) - $sizeInMB MB"
-          }
-
-      - name: Verify installer
-        shell: pwsh
-        run: |
-          Write-Host "================================================"
-          Write-Host "  Verifying Installer"
-          Write-Host "================================================"
-          Write-Host ""
-
-          cd installer
-
-          $installers = Get-ChildItem "Directus-Desktop-Setup-*.exe"
-
-          if ($installers.Count -eq 0) {
-            Write-Host "✗ ERROR: No installer found!"
-            exit 1
-          }
-
-          foreach ($installer in $installers) {
-            Write-Host "✓ Found: $($installer.Name)"
-            Write-Host "  Size: $([math]::Round($installer.Length / 1MB, 2)) MB"
-          }
+        run: Get-ChildItem -Path ./artifacts -Recurse
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Directus Desktop v${{ steps.version.outputs.version }}
-          body: |
-            ## 🎉 Directus Desktop v${{ steps.version.outputs.version }}
-
-            基于 **Directus 11.5.1** 的 Windows 桌面版（NSIS 安装包）
-
-            ### 📥 安装
-
-            1. 下载 `Directus-Desktop-Setup-${{ steps.version.outputs.version }}.exe`
-            2. 双击运行安装程序
-            3. 选择安装路径（默认：`C:\Program Files\Directus Desktop`）
-            4. 完成安装后，双击桌面快捷方式启动
-            5. 浏览器自动打开 `http://localhost:8055/admin`
-
-            ### 🔐 默认账号
-
-            - **邮箱**: `admin@example.com`
-            - **密码**: `admin`
-
-            ⚠️ **首次登录后请立即修改密码！**
-
-            ### ✨ 特性
-
-            - ✅ 完整的 Directus 11.5.1 CMS 功能
-            - ✅ 内置 SQLite 数据库
-            - ✅ 便携式 Node.js 运行时
-            - ✅ 数据完全可移植
-            - ✅ 支持多实例（不同端口）
-            - ✅ 无需安装 Node.js 或 Docker
-            - ✅ 一键启动/停止
-
-            ### 📂 数据位置
-
-            用户数据存储在：
-            ```
-            C:\Users\<用户名>\AppData\Roaming\directus-desktop\
-            ├── database\directus.db    (数据库)
-            ├── uploads\                 (上传文件)
-            ├── extensions\              (扩展插件)
-            └── directus.log            (日志)
-            ```
-
-            ### 🔄 数据迁移
-
-            **完整迁移**:
-            1. 关闭 Directus Desktop
-            2. 备份 `%APPDATA%\directus-desktop\` 目录
-            3. 在新电脑上安装 Directus Desktop
-            4. 关闭应用，复制备份目录覆盖
-            5. 启动应用
-
-            **只迁移数据库**:
-            ```
-            关闭应用 → 替换 database\directus.db → 启动
-            ```
-
-            ### 💡 使用技巧
-
-            - **启动**: 双击桌面快捷方式或开始菜单中的"Directus Desktop"
-            - **停止**: 关闭命令行窗口，或运行"停止 Directus"快捷方式
-            - **访问**: http://localhost:8055/admin
-            - **日志**: `%APPDATA%\directus-desktop\directus.log`
-            - **卸载**: 可选择保留或删除用户数据
-
-            ### 🆕 本版本改进
-
-            - ✅ 完全重构：不再使用 Electron
-            - ✅ 使用 NSIS 安装包 + 便携式 Node.js
-            - ✅ 避免了所有 ES Module 和单实例检测问题
-            - ✅ 安装包体积更小（~100MB）
-            - ✅ 启动速度更快
-            - ✅ 数据目录完全独立，易于备份和迁移
-
-            ---
-
-            **版本信息**
-            - Directus: 11.5.1
-            - Node.js: 20.11.0 (便携版)
-            - 安装方式: NSIS
-            - 支持系统: Windows 7/8/10/11 (x64)
-
+          files: ./artifacts/**/*
           draft: false
           prerelease: false
-          files: |
-            installer/Directus-Desktop-Setup-${{ steps.version.outputs.version }}.exe
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

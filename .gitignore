@@ -1,0 +1,59 @@
+# Node modules
+node_modules/
+
+# Build outputs
+out/
+dist/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+data.db*
+
+# Uploads
+uploads/
+
+# Extensions
+extensions/
+
+# Environment variables
+.env.local
+.env.production
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cache
+.cache/
+.electron/
+.forge/
+.npm/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Package manager
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+directus-electron-app/*
