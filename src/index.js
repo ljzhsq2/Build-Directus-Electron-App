@@ -22,6 +22,8 @@ let mainWindow;
 let isSplashAnimationEnded;
 let deeplinkingUrl;
 let directusProcess = null;
+let isDirectusStarted = false;
+let ipcHandlersRegistered = false;
 
 const prepareDirectus = async () => {
   const config = require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -52,6 +54,12 @@ const prepareDirectus = async () => {
 };
 
 const startDirectusServer = async () => {
+  // Prevent starting Directus multiple times
+  if (isDirectusStarted) {
+    console.log('Directus server already started, skipping...');
+    return;
+  }
+
   return new Promise((resolve, reject) => {
     try {
       // Get the path to directus CLI
@@ -90,7 +98,11 @@ const startDirectusServer = async () => {
 
         directusProcess.on('close', (code) => {
           console.log(`Directus process exited with code ${code}`);
+          isDirectusStarted = false;
         });
+
+        // Mark as started
+        isDirectusStarted = true;
 
         // Wait a bit for server to start
         setTimeout(() => {
@@ -110,12 +122,22 @@ const startDirectusServer = async () => {
 };
 
 const createWindow = async () => {
+  // Prevent creating multiple windows
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log('Main window already exists, focusing...');
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    return;
+  }
+
   const handleHideSplashScreen = (splashScreen, window) => {
     if (!isSplashAnimationEnded) {
       isSplashAnimationEnded = true;
       return;
     }
-    splashScreen.close();
+    if (!splashScreen.isDestroyed()) {
+      splashScreen.close();
+    }
     window.show();
     window.focus();
   };
@@ -143,9 +165,13 @@ const createWindow = async () => {
     },
   });
 
-  ipcMain.handle('onSplashEnded', () => {
-    handleHideSplashScreen(splashScreen, mainWindow);
-  });
+  // Register IPC handlers only once
+  if (!ipcHandlersRegistered) {
+    ipcMain.handle('onSplashEnded', () => {
+      handleHideSplashScreen(splashScreen, mainWindow);
+    });
+    ipcHandlersRegistered = true;
+  }
 
   mainWindow.once('ready-to-show', () => {
     handleHideSplashScreen(splashScreen, mainWindow);
@@ -153,7 +179,7 @@ const createWindow = async () => {
 
   splashScreen.loadFile(path.join(__dirname, 'splash.html'));
 
-  // Start Directus server
+  // Start Directus server only once
   try {
     console.log('Preparing Directus environment...');
     await prepareDirectus();
@@ -192,10 +218,14 @@ app.on('second-instance', (_, commandLine) => {
 
 app.whenReady().then(async () => {
   createWindow();
+});
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+// Register activate event handler only once, OUTSIDE of whenReady
+app.on('activate', () => {
+  // On macOS it's common to re-create a window when the dock icon is clicked
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
 });
 
 app.on('open-url', (_, url) => {
