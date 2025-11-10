@@ -313,6 +313,12 @@ function showErrorDialog(title, message) {
 }
 
 function createWindow() {
+  // 如果窗口已存在，不重复创建
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    log('Window already exists, skipping creation');
+    return;
+  }
+
   const iconPath = path.join(__dirname, 'icon.ico');
   const windowOptions = {
     width: 1400,
@@ -331,6 +337,7 @@ function createWindow() {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+  log('Main window created');
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
     <!DOCTYPE html>
@@ -397,15 +404,37 @@ function createWindow() {
 
   setTimeout(() => {
     checkDirectusReady();
-  }, 15000);
+  }, 5000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 
+  // 阻止所有新窗口打开
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // 所有外部链接都在系统浏览器中打开
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // 阻止导航到外部链接
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const parsedUrl = new URL(url);
+    const currentUrl = mainWindow.webContents.getURL();
+
+    // 如果不是 localhost，阻止导航并在外部浏览器打开
+    if (parsedUrl.hostname !== 'localhost' && parsedUrl.hostname !== '127.0.0.1') {
+      event.preventDefault();
+      shell.openExternal(url);
+      log(`Blocked navigation to external URL: ${url}`);
+    }
+  });
+
+  // 防止意外的新窗口
+  mainWindow.webContents.on('new-window', (event, url) => {
+    event.preventDefault();
+    shell.openExternal(url);
+    log(`Blocked new window: ${url}`);
   });
 }
 
@@ -471,43 +500,59 @@ ipcMain.handle('get-startup-logs', () => {
   return startupLogs;
 });
 
-app.on('ready', () => {
-  log('=== Application Starting ===');
-  log(`App version: ${app.getVersion()}`);
-  log(`Electron version: ${process.versions.electron}`);
-  log(`Node version: ${process.versions.node}`);
-  log(`Platform: ${process.platform}`);
-  log(`Is packaged: ${app.isPackaged}`);
-  log(`App path: ${app.getAppPath()}`);
-  log(`Resources path: ${process.resourcesPath}`);
-  log(`User data: ${app.getPath('userData')}`);
+// 防止多个实例同时运行
+const gotTheLock = app.requestSingleInstanceLock();
 
-  // 并行启动：Directus 和窗口同时创建
-  startDirectus();
-  createWindow();  // 不等待 2 秒，直接创建窗口
-
-  // 5 秒后开始健康检查（减少等待时间）
-  setTimeout(() => {
-    checkDirectusReady();
-  }, 5000);
-
-  // 10 秒后检查更新（不阻塞启动）
-  setTimeout(() => {
-    if (app.isPackaged) {  // 只在打包后的应用中检查更新
-      log('Checking for updates...');
-      autoUpdater.checkForUpdates().catch((err) => {
-        log(`Check for updates error: ${err.message}`);
-      });
-    }
-  }, 10000);
-
-  const { globalShortcut } = require('electron');
-  globalShortcut.register('F12', () => {
+if (!gotTheLock) {
+  log('Another instance is already running, quitting...');
+  app.quit();
+} else {
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
+    // 当运行第二个实例时，聚焦到已有的窗口
     if (mainWindow) {
-      mainWindow.webContents.toggleDevTools();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
-});
+
+  app.on('ready', () => {
+    log('=== Application Starting ===');
+    log(`App version: ${app.getVersion()}`);
+    log(`Electron version: ${process.versions.electron}`);
+    log(`Node version: ${process.versions.node}`);
+    log(`Platform: ${process.platform}`);
+    log(`Is packaged: ${app.isPackaged}`);
+    log(`App path: ${app.getAppPath()}`);
+    log(`Resources path: ${process.resourcesPath}`);
+    log(`User data: ${app.getPath('userData')}`);
+
+    // 并行启动：Directus 和窗口同时创建
+    startDirectus();
+    createWindow();  // 不等待 2 秒，直接创建窗口
+
+    // 5 秒后开始健康检查（减少等待时间）
+    setTimeout(() => {
+      checkDirectusReady();
+    }, 5000);
+
+    // 10 秒后检查更新（不阻塞启动）
+    setTimeout(() => {
+      if (app.isPackaged) {  // 只在打包后的应用中检查更新
+        log('Checking for updates...');
+        autoUpdater.checkForUpdates().catch((err) => {
+          log(`Check for updates error: ${err.message}`);
+        });
+      }
+    }, 10000);
+
+    const { globalShortcut } = require('electron');
+    globalShortcut.register('F12', () => {
+      if (mainWindow) {
+        mainWindow.webContents.toggleDevTools();
+      }
+    });
+  });
+}
 
 app.on('window-all-closed', () => {
   if (directusProcess) {
