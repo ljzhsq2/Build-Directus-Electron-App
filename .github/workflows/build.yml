@@ -44,6 +44,19 @@ jobs:
           # 清理残留符号链接
           find directus-app -type l -delete 2>/dev/null || true
 
+          echo "=== Ensure package.json has type:module ==="
+          # 确保 Directus 的 package.json 包含 "type": "module"
+          if [ -f "directus-app/package.json" ]; then
+            # 检查是否已经有 type 字段
+            if ! grep -q '"type"' directus-app/package.json; then
+              # 添加 "type": "module" 到 package.json
+              sed -i '2i\  "type": "module",' directus-app/package.json
+              echo "✓ Added type:module to package.json"
+            else
+              echo "✓ package.json already has type field"
+            fi
+          fi
+
           echo "=== Packaging ==="
           tar -czf directus-files.tar.gz directus-app
 

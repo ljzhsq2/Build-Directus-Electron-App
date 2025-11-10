@@ -141,12 +141,17 @@ function getDirectusPath() {
 function findDirectusCLI(directusAppPath) {
   // 可能的 CLI 路径（按优先级排序）
   const possiblePaths = [
-    path.join(directusAppPath, 'cli.js'),
-    path.join(directusAppPath, 'dist', 'cli.js'),
-    path.join(directusAppPath, 'dist', 'cli', 'index.js'),
+    // 优先查找编译后的 CommonJS 版本
+    path.join(directusAppPath, 'dist', 'start.js'),
     path.join(directusAppPath, 'dist', 'index.js'),
-    path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
+    path.join(directusAppPath, 'dist', 'cli', 'index.js'),
+    path.join(directusAppPath, 'dist', 'cli.js'),
+    // 然后是 bin 目录
     path.join(directusAppPath, 'node_modules', '.bin', 'directus'),
+    path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
+    path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'start.js'),
+    // 最后才是 ESM 的 cli.js
+    path.join(directusAppPath, 'cli.js')
   ];
 
   log('Searching for Directus CLI...');
@@ -273,8 +278,10 @@ function startDirectus() {
   log(`Working directory: ${directusAppPath}`);
 
   // 使用 Electron 的 node 运行 Directus
-  // ELECTRON_RUN_AS_NODE=1 让子进程以纯 Node.js 模式运行
-  directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
+  // 使用 --experimental-loader 或直接运行，Node.js 会根据 package.json 的 type 判断
+  const args = [directusCliPath, 'start'];
+
+  directusProcess = spawn(process.execPath, args, {
     env: env,
     cwd: directusAppPath,
     stdio: ['ignore', 'pipe', 'pipe'],
