@@ -18,12 +18,14 @@ if (electronSquirrelStartup) {
   app.quit();
 }
 
-let mainWindow;
-let isSplashAnimationEnded;
+let mainWindow = null;
+let splashScreen = null;
+let isSplashAnimationEnded = false;
 let deeplinkingUrl;
 let directusProcess = null;
 let isDirectusStarted = false;
 let ipcHandlersRegistered = false;
+let isCreatingWindow = false; // 添加创建窗口的锁
 
 const prepareDirectus = async () => {
   const config = require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -122,83 +124,135 @@ const startDirectusServer = async () => {
 };
 
 const createWindow = async () => {
+  console.log('[DEBUG] createWindow called');
+  console.log('[DEBUG] isCreatingWindow:', isCreatingWindow);
+  console.log('[DEBUG] mainWindow exists:', mainWindow !== null);
+  console.log('[DEBUG] mainWindow destroyed:', mainWindow ? mainWindow.isDestroyed() : 'N/A');
+
+  // Prevent concurrent window creation
+  if (isCreatingWindow) {
+    console.log('[DEBUG] Already creating window, aborting...');
+    return;
+  }
+
   // Prevent creating multiple windows
   if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log('Main window already exists, focusing...');
+    console.log('[DEBUG] Main window already exists, focusing...');
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
     return;
   }
 
-  const handleHideSplashScreen = (splashScreen, window) => {
-    if (!isSplashAnimationEnded) {
-      isSplashAnimationEnded = true;
-      return;
+  isCreatingWindow = true;
+  console.log('[DEBUG] Starting window creation...');
+
+  try {
+    const handleHideSplashScreen = (splash, window) => {
+      console.log('[DEBUG] handleHideSplashScreen called, isSplashAnimationEnded:', isSplashAnimationEnded);
+      if (!isSplashAnimationEnded) {
+        isSplashAnimationEnded = true;
+        return;
+      }
+      if (splash && !splash.isDestroyed()) {
+        console.log('[DEBUG] Closing splash screen');
+        splash.close();
+      }
+      if (window && !window.isDestroyed()) {
+        console.log('[DEBUG] Showing main window');
+        window.show();
+        window.focus();
+      }
+    };
+
+    console.log('[DEBUG] Creating main window...');
+    mainWindow = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      show: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    console.log('[DEBUG] Creating splash screen...');
+    splashScreen = new BrowserWindow({
+      width: 480,
+      height: 270,
+      transparent: true,
+      frame: false,
+      alwaysOnTop: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        nodeIntegration: true,
+        contextIsolation: false,
+      },
+    });
+
+    // Register IPC handlers only once
+    if (!ipcHandlersRegistered) {
+      console.log('[DEBUG] Registering IPC handlers...');
+      ipcMain.handle('onSplashEnded', () => {
+        handleHideSplashScreen(splashScreen, mainWindow);
+      });
+      ipcHandlersRegistered = true;
     }
-    if (!splashScreen.isDestroyed()) {
-      splashScreen.close();
-    }
-    window.show();
-    window.focus();
-  };
 
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    show: false,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-    },
-  });
-
-  const splashScreen = new BrowserWindow({
-    width: 480,
-    height: 270,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
-
-  // Register IPC handlers only once
-  if (!ipcHandlersRegistered) {
-    ipcMain.handle('onSplashEnded', () => {
+    mainWindow.once('ready-to-show', () => {
+      console.log('[DEBUG] Main window ready-to-show event');
       handleHideSplashScreen(splashScreen, mainWindow);
     });
-    ipcHandlersRegistered = true;
-  }
 
-  mainWindow.once('ready-to-show', () => {
-    handleHideSplashScreen(splashScreen, mainWindow);
-  });
+    // Clean up when window is closed
+    mainWindow.on('closed', () => {
+      console.log('[DEBUG] Main window closed');
+      mainWindow = null;
+      isCreatingWindow = false;
+    });
 
-  splashScreen.loadFile(path.join(__dirname, 'splash.html'));
+    if (splashScreen) {
+      splashScreen.on('closed', () => {
+        console.log('[DEBUG] Splash screen closed');
+        splashScreen = null;
+      });
+    }
 
-  // Start Directus server only once
-  try {
-    console.log('Preparing Directus environment...');
-    await prepareDirectus();
+    console.log('[DEBUG] Loading splash screen HTML...');
+    splashScreen.loadFile(path.join(__dirname, 'splash.html'));
 
-    console.log('Starting Directus server...');
-    await startDirectusServer();
+    // Start Directus server only once
+    try {
+      console.log('[DEBUG] Preparing Directus environment...');
+      await prepareDirectus();
 
-    console.log('Directus server started successfully on port 8055');
+      console.log('[DEBUG] Starting Directus server...');
+      await startDirectusServer();
+
+      console.log('[DEBUG] Directus server started successfully on port 8055');
+    } catch (error) {
+      console.error('[DEBUG] Failed to start Directus server:', error);
+      dialog.showErrorBox('Directus Error', `Failed to start Directus server: ${error.message}`);
+    }
+
+    console.log('[DEBUG] Loading main window URL...');
+    mainWindow.loadURL('http://localhost:8055');
+
+    if (!app.isPackaged) {
+      console.log('[DEBUG] Opening DevTools...');
+      mainWindow.webContents.openDevTools();
+    }
+
+    console.log('[DEBUG] Window creation completed');
+    isCreatingWindow = false;
   } catch (error) {
-    console.error('Failed to start Directus server:', error);
-    dialog.showErrorBox('Directus Error', `Failed to start Directus server: ${error.message}`);
+    console.error('[DEBUG] Error in createWindow:', error);
+    isCreatingWindow = false;
+    throw error;
   }
-
-  mainWindow.loadURL('http://localhost:8055');
-
-  if (!app.isPackaged) mainWindow.webContents.openDevTools();
 };
 
 app.on('second-instance', (_, commandLine) => {
+  console.log('[DEBUG] second-instance event fired');
   if (process.platform !== 'darwin') {
     deeplinkingUrl = commandLine.find((arg) => arg.startsWith('directus://'));
   }
@@ -217,11 +271,14 @@ app.on('second-instance', (_, commandLine) => {
 });
 
 app.whenReady().then(async () => {
+  console.log('[DEBUG] app.whenReady fired');
   createWindow();
 });
 
 // Register activate event handler only once, OUTSIDE of whenReady
 app.on('activate', () => {
+  console.log('[DEBUG] activate event fired');
+  console.log('[DEBUG] Window count:', BrowserWindow.getAllWindows().length);
   // On macOS it's common to re-create a window when the dock icon is clicked
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
@@ -229,6 +286,7 @@ app.on('activate', () => {
 });
 
 app.on('open-url', (_, url) => {
+  console.log('[DEBUG] open-url event fired:', url);
   deeplinkingUrl = url;
   if (mainWindow) {
     dialog.showMessageBox(mainWindow, {
@@ -240,6 +298,7 @@ app.on('open-url', (_, url) => {
 });
 
 app.on('window-all-closed', () => {
+  console.log('[DEBUG] window-all-closed event fired');
   // Kill Directus process when app closes
   if (directusProcess) {
     console.log('Stopping Directus server...');
