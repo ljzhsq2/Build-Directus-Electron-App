@@ -12,18 +12,18 @@ echo ================================================
 echo.
 
 REM 获取脚本所在目录
-set "SCRIPT_DIR=%~dp0"
-set "RUNTIME_DIR=%SCRIPT_DIR%runtime"
-set "NODE_EXE=%RUNTIME_DIR%\node.exe"
-set "DIRECTUS_DIR=%RUNTIME_DIR%\directus"
-set "DIRECTUS_CLI=%DIRECTUS_DIR%\cli.js"
+set SCRIPT_DIR=%~dp0
+set RUNTIME_DIR=%SCRIPT_DIR%runtime
+set NODE_EXE=%RUNTIME_DIR%\node.exe
+set DIRECTUS_DIR=%RUNTIME_DIR%\directus
+set DIRECTUS_CLI=%DIRECTUS_DIR%\cli.js
 
 REM 数据目录（用户的 AppData\Roaming）
-set "DATA_DIR=%APPDATA%\directus-desktop"
-set "DB_DIR=%DATA_DIR%\database"
-set "UPLOADS_DIR=%DATA_DIR%\uploads"
-set "EXTENSIONS_DIR=%DATA_DIR%\extensions"
-set "LOG_FILE=%DATA_DIR%\directus.log"
+set DATA_DIR=%APPDATA%\directus-desktop
+set DB_DIR=%DATA_DIR%\database
+set UPLOADS_DIR=%DATA_DIR%\uploads
+set EXTENSIONS_DIR=%DATA_DIR%\extensions
+set LOG_FILE=%DATA_DIR%\directus.log
 
 REM 检查 Node.js 是否存在
 if not exist "%NODE_EXE%" (
@@ -66,37 +66,37 @@ echo   - Extensions: %EXTENSIONS_DIR%
 echo.
 
 REM 设置 Directus 环境变量
-set "PORT=8055"
-set "HOST=0.0.0.0"
-set "PUBLIC_URL=http://localhost:8055"
+set PORT=8055
+set HOST=0.0.0.0
+set PUBLIC_URL=http://localhost:8055
 
 REM 数据库配置
-set "DB_CLIENT=sqlite3"
-set "DB_FILENAME=%DB_DIR%\directus.db"
-set "DB_SQLITE_USE_WAL=true"
+set DB_CLIENT=sqlite3
+set DB_FILENAME=%DB_DIR%\directus.db
+set DB_SQLITE_USE_WAL=true
 
 REM 存储配置
-set "STORAGE_LOCATIONS=local"
-set "STORAGE_LOCAL_ROOT=%UPLOADS_DIR%"
+set STORAGE_LOCATIONS=local
+set STORAGE_LOCAL_ROOT=%UPLOADS_DIR%
 
 REM 扩展配置
-set "EXTENSIONS_PATH=%EXTENSIONS_DIR%"
+set EXTENSIONS_PATH=%EXTENSIONS_DIR%
 
 REM 管理员配置（首次启动）
-set "ADMIN_EMAIL=admin@example.com"
-set "ADMIN_PASSWORD=admin"
+set ADMIN_EMAIL=admin@example.com
+set ADMIN_PASSWORD=admin
 
 REM 密钥（使用随机值）
-set "KEY=directus-desktop-key-%RANDOM%%RANDOM%"
-set "SECRET=directus-desktop-secret-%RANDOM%%RANDOM%"
+set KEY=directus-desktop-key-%RANDOM%%RANDOM%
+set SECRET=directus-desktop-secret-%RANDOM%%RANDOM%
 
 REM 其他配置
-set "TELEMETRY=false"
-set "NODE_ENV=production"
-set "LOG_LEVEL=info"
-set "CACHE_ENABLED=true"
-set "CACHE_STORE=memory"
-set "CACHE_TTL=10m"
+set TELEMETRY=false
+set NODE_ENV=production
+set LOG_LEVEL=info
+set CACHE_ENABLED=true
+set CACHE_STORE=memory
+set CACHE_TTL=10m
 
 echo [INFO] Starting Directus server on port %PORT%...
 echo [INFO] Log file: %LOG_FILE%
