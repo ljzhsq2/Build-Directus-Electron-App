@@ -137,9 +137,15 @@ jobs:
 
           choco install nsis -y
 
+          # 刷新环境变量
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
           Write-Host ""
           Write-Host "✓ NSIS installed"
-          makensis /VERSION
+          Write-Host ""
+
+          # 显示 NSIS 版本
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /VERSION
 
       - name: Get version
         id: version
@@ -174,7 +180,10 @@ jobs:
 
           Write-Host ""
           Write-Host "Running NSIS..."
-          makensis installer.nsi
+
+          # 使用完整路径调用 makensis
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          & $makensis installer.nsi
 
           Write-Host ""
           Write-Host "✓ Installer built successfully"
