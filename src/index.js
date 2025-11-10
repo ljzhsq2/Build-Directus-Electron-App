@@ -2,6 +2,7 @@ const {
   app, BrowserWindow, ipcMain, dialog,
 } = require('electron');
 const path = require('path');
+const { spawn } = require('child_process');
 const electronSquirrelStartup = require('electron-squirrel-startup');
 
 if (process.defaultApp) {
@@ -20,6 +21,7 @@ if (electronSquirrelStartup) {
 let mainWindow;
 let isSplashAnimationEnded;
 let deeplinkingUrl;
+let directusProcess = null;
 
 const prepareDirectus = async () => {
   const config = require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -47,10 +49,64 @@ const prepareDirectus = async () => {
   if (app.isPackaged) {
     process.env.LOG_LEVEL = 'silent';
   }
+};
 
-  // Import and start Directus server (for Directus 11.x)
-  const { createServer } = await import('directus');
-  return createServer();
+const startDirectusServer = async () => {
+  return new Promise((resolve, reject) => {
+    try {
+      // Get the path to directus CLI
+      const directusCliPath = path.join(__dirname, '../node_modules/directus/cli.js');
+      const nodeExecutable = process.execPath;
+
+      console.log('Node executable:', nodeExecutable);
+      console.log('Directus CLI path:', directusCliPath);
+
+      // First, run bootstrap to initialize database
+      console.log('Running Directus bootstrap...');
+      const bootstrap = spawn(nodeExecutable, [directusCliPath, 'bootstrap'], {
+        env: process.env,
+        stdio: 'inherit',
+      });
+
+      bootstrap.on('close', (code) => {
+        if (code !== 0) {
+          console.error(`Bootstrap process exited with code ${code}`);
+        }
+
+        // After bootstrap, start the server
+        console.log('Starting Directus server...');
+        directusProcess = spawn(nodeExecutable, [directusCliPath, 'start'], {
+          env: process.env,
+          stdio: 'pipe',
+        });
+
+        directusProcess.stdout.on('data', (data) => {
+          console.log(`Directus: ${data}`);
+        });
+
+        directusProcess.stderr.on('data', (data) => {
+          console.error(`Directus Error: ${data}`);
+        });
+
+        directusProcess.on('close', (code) => {
+          console.log(`Directus process exited with code ${code}`);
+        });
+
+        // Wait a bit for server to start
+        setTimeout(() => {
+          resolve();
+        }, 5000);
+      });
+
+      bootstrap.on('error', (error) => {
+        console.error('Failed to start bootstrap:', error);
+        reject(error);
+      });
+    } catch (error) {
+      console.error('Error starting Directus:', error);
+      reject(error);
+    }
+  });
 };
 
 const createWindow = async () => {
@@ -99,24 +155,17 @@ const createWindow = async () => {
 
   // Start Directus server
   try {
-    console.log('Starting Directus server...');
-    const server = await prepareDirectus();
+    console.log('Preparing Directus environment...');
+    await prepareDirectus();
 
-    // Start the server
-    await server.listen();
+    console.log('Starting Directus server...');
+    await startDirectusServer();
 
     console.log('Directus server started successfully on port 8055');
   } catch (error) {
     console.error('Failed to start Directus server:', error);
     dialog.showErrorBox('Directus Error', `Failed to start Directus server: ${error.message}`);
   }
-
-  // Wait a bit for Directus to be fully ready
-  await new Promise((resolve) => {
-    setTimeout(() => {
-      resolve();
-    }, 5000);
-  });
 
   mainWindow.loadURL('http://localhost:8055');
 
@@ -161,6 +210,12 @@ app.on('open-url', (_, url) => {
 });
 
 app.on('window-all-closed', () => {
+  // Kill Directus process when app closes
+  if (directusProcess) {
+    console.log('Stopping Directus server...');
+    directusProcess.kill();
+  }
+
   if (process.platform !== 'darwin') {
     app.quit();
   }
