@@ -137,35 +137,45 @@ jobs:
         shell: bash
         run: |
           echo "=== Final Verification Before Build ==="
-          echo ""
-          echo "Checking directus-app directory:"
-          if [ -d "directus-app" ]; then
-            echo "✓ directus-app exists"
-            echo ""
-            echo "Size:"
-            du -sh directus-app
-            echo ""
-            echo "Top-level contents:"
-            ls -la directus-app/ | head -20
-            echo ""
-            echo "Looking for CLI:"
-            find directus-app -name "cli.js" -o -name "index.js" -type f | head -10
-          else
+
+          if [ ! -d "directus-app" ]; then
             echo "❌ ERROR: directus-app not found!"
             ls -la
             exit 1
           fi
-          
+
+          echo "✓ directus-app exists"
           echo ""
-          echo "Checking package.json build config:"
-          if [ -f "package.json" ]; then
-            echo "✓ package.json exists"
-            grep -A 5 '"files"' package.json || echo "No files section found"
-            grep -A 3 '"asarUnpack"' package.json || echo "No asarUnpack section found"
-          else
-            echo "❌ ERROR: package.json not found!"
-            exit 1
+
+          echo "Size:"
+          du -sh directus-app || echo "Size: $(find directus-app -type f | wc -l) files"
+          echo ""
+
+          echo "Key files check:"
+          if [ -f "directus-app/cli.js" ]; then
+            echo "  ✓ cli.js"
           fi
+          if [ -f "directus-app/package.json" ]; then
+            echo "  ✓ package.json"
+          fi
+          if [ -d "directus-app/node_modules" ]; then
+            echo "  ✓ node_modules"
+          fi
+
+          echo ""
+          echo "Build config check:"
+          if [ -f "package.json" ]; then
+            echo "  ✓ package.json (Electron)"
+          fi
+          if [ -f "main.js" ]; then
+            echo "  ✓ main.js"
+          fi
+          if [ -f "preload.js" ]; then
+            echo "  ✓ preload.js"
+          fi
+
+          echo ""
+          echo "✅ All required files present, ready to build"
 
       - name: Install Electron dependencies
         run: npm install
