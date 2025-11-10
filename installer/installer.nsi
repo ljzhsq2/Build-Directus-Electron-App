@@ -160,9 +160,7 @@ Section Uninstall
     DeleteRegKey HKLM "Software\${PRODUCT_NAME}"
 
     ; 询问是否删除用户数据
-    MessageBox MB_YESNO|MB_ICONQUESTION \
-        "是否删除用户数据？$\n$\n数据位置：$\n$APPDATA\directus-desktop$\n$\n包括：数据库、上传文件、扩展等$\n$\n选择"否"保留数据以便将来使用" \
-        IDYES DeleteData IDNO KeepData
+    MessageBox MB_YESNO|MB_ICONQUESTION "是否删除用户数据?$\n$\n数据位置: $APPDATA\directus-desktop$\n$\n包括: 数据库、上传文件、扩展等$\n$\n选择[否]保留数据以便将来使用" IDYES DeleteData IDNO KeepData
 
     DeleteData:
         DetailPrint "正在删除用户数据..."
