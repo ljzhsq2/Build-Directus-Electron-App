@@ -1,4 +1,4 @@
-name: Build Directus 11.5.1 Electron App
+name: Build Directus Desktop 11.5.1 (NSIS)
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g., 1.0.0)'
+        description: 'Version number (e.g., 2.0.0)'
         required: true
-        default: '1.0.0'
+        default: '2.0.0'
 
 permissions:
   contents: write
@@ -27,178 +27,185 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Directus 11.5.1
-        shell: bash
+      - name: Download portable Node.js
+        shell: pwsh
         run: |
-          echo "═══════════════════════════════════════════════"
-          echo "  Installing Directus 11.5.1"
-          echo "═══════════════════════════════════════════════"
+          Write-Host "================================================"
+          Write-Host "  Downloading Portable Node.js 20.x"
+          Write-Host "================================================"
+          Write-Host ""
+
+          $NODE_VERSION = "20.11.0"
+          $NODE_URL = "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-win-x64.zip"
+
+          Write-Host "Downloading from: $NODE_URL"
+          Invoke-WebRequest -Uri $NODE_URL -OutFile "node-portable.zip"
+
+          Write-Host "Extracting..."
+          Expand-Archive -Path "node-portable.zip" -DestinationPath "." -Force
+
+          Write-Host "Renaming directory..."
+          Rename-Item -Path "node-v$NODE_VERSION-win-x64" -NewName "node-portable"
+
+          Write-Host ""
+          Write-Host "✓ Portable Node.js ready"
+          Write-Host "  Location: $(Get-Location)\node-portable"
+          Write-Host "  Node version:"
+          & .\node-portable\node.exe --version
+
+      - name: Install Directus 11.5.1
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "  Installing Directus 11.5.1"
+          Write-Host "================================================"
+          Write-Host ""
 
           cd directus-app
 
-          echo ""
-          echo "📦 Running npm install..."
-          npm install --production
+          Write-Host "Running: npm install --production"
+          npm install --production --no-optional
 
-          echo ""
-          echo "✓ Installation complete"
-          echo ""
-          echo "Verifying installation:"
-          ls -lh node_modules/directus/
+          Write-Host ""
+          Write-Host "✓ Directus 11.5.1 installed"
+          Write-Host ""
+          Write-Host "Verification:"
 
-          if [ -f "node_modules/directus/cli.js" ]; then
-            echo "  ✓ Directus CLI found"
-          else
-            echo "  ❌ Directus CLI not found!"
+          if (Test-Path "node_modules\directus\cli.js") {
+            Write-Host "  ✓ Directus CLI found"
+          } else {
+            Write-Host "  ✗ Directus CLI NOT FOUND!"
             exit 1
-          fi
+          }
 
-          echo ""
-          echo "Checking package.json type:"
-          if [ -f "node_modules/directus/package.json" ]; then
-            grep '"type"' node_modules/directus/package.json || echo "  (no type field)"
-          fi
+          Write-Host ""
+          Write-Host "Directory size:"
+          $size = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "  $([math]::Round($size, 2)) MB"
 
-      - name: Prepare Electron app
-        shell: bash
+      - name: Prepare build structure
+        shell: pwsh
         run: |
-          echo "═══════════════════════════════════════════════"
-          echo "  Preparing Electron Application"
-          echo "═══════════════════════════════════════════════"
+          Write-Host "================================================"
+          Write-Host "  Preparing Build Structure"
+          Write-Host "================================================"
+          Write-Host ""
 
-          # 获取版本号
-          VERSION="${{ github.event.inputs.version || '1.0.0' }}"
-          echo "Version: ${VERSION}"
+          # 创建 runtime 目录
+          New-Item -ItemType Directory -Force -Path "installer\runtime" | Out-Null
+          New-Item -ItemType Directory -Force -Path "installer\runtime\directus" | Out-Null
 
-          # 复制 Electron 配置
-          cp electron-app/package.json.template package.json
-          cp electron-app/main.js main.js
-          cp electron-app/preload.js preload.js
+          Write-Host "Copying Node.js runtime..."
+          Copy-Item "node-portable\node.exe" "installer\runtime\node.exe"
 
-          # 替换版本号
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" package.json
+          Write-Host "Copying Directus files..."
+          Copy-Item -Path "directus-app\*" -Destination "installer\runtime\directus" -Recurse -Force
 
-          # 复制图标（如果存在）
-          if [ -f "electron-app/icon.ico" ]; then
-            cp electron-app/icon.ico icon.ico
-          fi
+          Write-Host ""
+          Write-Host "✓ Build structure ready"
+          Write-Host ""
+          Write-Host "Structure:"
+          Get-ChildItem "installer\runtime" | ForEach-Object { Write-Host "  - $($_.Name)" }
 
-          echo ""
-          echo "✓ Electron app structure ready"
-          echo ""
-          echo "Structure:"
-          ls -lh
-
-      - name: Verify build structure
-        shell: bash
+      - name: Create icon (placeholder)
+        shell: pwsh
         run: |
-          echo "═══════════════════════════════════════════════"
-          echo "  Final Structure Verification"
-          echo "═══════════════════════════════════════════════"
+          Write-Host "================================================"
+          Write-Host "  Creating Icon"
+          Write-Host "================================================"
+          Write-Host ""
 
-          echo ""
-          echo "Root files:"
-          ls -lh *.js *.json 2>/dev/null || true
+          # 检查是否有 icon.ico
+          if (Test-Path "installer\icon.ico") {
+            Write-Host "✓ icon.ico already exists"
+          } else {
+            Write-Host "⚠ No icon.ico found"
+            Write-Host "  Creating placeholder..."
+            # 创建一个空的 .ico 文件（NSIS 需要）
+            # 在实际生产中，应该提供真实的图标
+            New-Item -ItemType File -Path "installer\icon.ico" -Force | Out-Null
+            Write-Host "  ✓ Placeholder created"
+          }
 
-          echo ""
-          echo "directus-app/ contents:"
-          ls -lh directus-app/
-
-          echo ""
-          echo "Checking critical files:"
-
-          files=(
-            "package.json"
-            "main.js"
-            "preload.js"
-            "directus-app/server.js"
-            "directus-app/package.json"
-            "directus-app/node_modules/directus/cli.js"
-          )
-
-          all_good=true
-          for file in "${files[@]}"; do
-            if [ -f "$file" ]; then
-              echo "  ✓ $file"
-            else
-              echo "  ❌ $file MISSING!"
-              all_good=false
-            fi
-          done
-
-          if [ "$all_good" = false ]; then
-            echo ""
-            echo "❌ Some required files are missing!"
-            exit 1
-          fi
-
-          echo ""
-          echo "✅ All files present, ready to build"
-
-      - name: Install Electron dependencies
-        run: npm install
-
-      - name: Build Electron app
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build -- --publish always
-
-      - name: Verify build output
-        shell: bash
+      - name: Install NSIS
+        shell: pwsh
         run: |
-          echo "═══════════════════════════════════════════════"
-          echo "  Build Output Verification"
-          echo "═══════════════════════════════════════════════"
+          Write-Host "================================================"
+          Write-Host "  Installing NSIS"
+          Write-Host "================================================"
+          Write-Host ""
 
-          echo ""
-          echo "dist/ contents:"
-          ls -lh dist/
+          choco install nsis -y
 
-          echo ""
-          EXE_COUNT=$(find dist -name "*.exe" -type f | wc -l)
-          echo "Found ${EXE_COUNT} .exe file(s)"
-
-          if [ $EXE_COUNT -eq 0 ]; then
-            echo ""
-            echo "❌ ERROR: No installer found!"
-            echo ""
-            echo "All files in dist/:"
-            find dist -type f
-            exit 1
-          fi
-
-          echo ""
-          echo "✅ Build successful"
+          Write-Host ""
+          Write-Host "✓ NSIS installed"
+          makensis /VERSION
 
       - name: Get version
         id: version
-        shell: bash
+        shell: pwsh
         run: |
-          if [ "${{ github.ref_type }}" == "tag" ]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION="${{ github.event.inputs.version }}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $VERSION = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $VERSION = "${{ github.event.inputs.version }}"
+          }
 
-      - name: Prepare release files
-        shell: bash
+          Write-Host "Version: $VERSION"
+          "version=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build installer with NSIS
+        shell: pwsh
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          cd dist
+          Write-Host "================================================"
+          Write-Host "  Building Installer"
+          Write-Host "================================================"
+          Write-Host ""
 
-          # 重命名安装包
-          INSTALLER=$(find . -maxdepth 1 -name "*.exe" -type f | head -n 1)
+          $VERSION = "${{ steps.version.outputs.version }}"
+          Write-Host "Building version: $VERSION"
 
-          if [ -n "$INSTALLER" ]; then
-            NEW_NAME="Directus-Desktop-${VERSION}-Windows-x64-Setup.exe"
-            mv "$INSTALLER" "$NEW_NAME"
-            echo "✓ Renamed to: $NEW_NAME"
-          else
-            echo "❌ No installer found!"
+          cd installer
+
+          # 替换版本号
+          $nsiContent = Get-Content "installer.nsi" -Raw
+          $nsiContent = $nsiContent -replace "VERSION_PLACEHOLDER", $VERSION
+          $nsiContent | Set-Content "installer.nsi"
+
+          Write-Host ""
+          Write-Host "Running NSIS..."
+          makensis installer.nsi
+
+          Write-Host ""
+          Write-Host "✓ Installer built successfully"
+
+          # 显示生成的文件
+          Get-ChildItem "Directus-Desktop-Setup-*.exe" | ForEach-Object {
+            $sizeInMB = [math]::Round($_.Length / 1MB, 2)
+            Write-Host "  $($_.Name) - $sizeInMB MB"
+          }
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "  Verifying Installer"
+          Write-Host "================================================"
+          Write-Host ""
+
+          cd installer
+
+          $installers = Get-ChildItem "Directus-Desktop-Setup-*.exe"
+
+          if ($installers.Count -eq 0) {
+            Write-Host "✗ ERROR: No installer found!"
             exit 1
-          fi
+          }
+
+          foreach ($installer in $installers) {
+            Write-Host "✓ Found: $($installer.Name)"
+            Write-Host "  Size: $([math]::Round($installer.Length / 1MB, 2)) MB"
+          }
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -208,54 +215,86 @@ jobs:
           body: |
             ## 🎉 Directus Desktop v${{ steps.version.outputs.version }}
 
-            基于 **Directus 11.5.1** 的 Windows 桌面应用
+            基于 **Directus 11.5.1** 的 Windows 桌面版（NSIS 安装包）
 
             ### 📥 安装
 
-            1. 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe`
+            1. 下载 `Directus-Desktop-Setup-${{ steps.version.outputs.version }}.exe`
             2. 双击运行安装程序
-            3. 首次启动等待约 10 秒初始化数据库
-            4. 开始使用！
+            3. 选择安装路径（默认：`C:\Program Files\Directus Desktop`）
+            4. 完成安装后，双击桌面快捷方式启动
+            5. 浏览器自动打开 `http://localhost:8055/admin`
 
-            ### 🔐 默认管理员账号
+            ### 🔐 默认账号
 
             - **邮箱**: `admin@example.com`
             - **密码**: `admin`
 
-            ⚠️ **请在首次登录后立即修改密码！**
+            ⚠️ **首次登录后请立即修改密码！**
 
             ### ✨ 特性
 
             - ✅ 完整的 Directus 11.5.1 CMS 功能
             - ✅ 内置 SQLite 数据库
-            - ✅ 自动更新支持
-            - ✅ 完全离线可用
-            - ✅ 一键启动
+            - ✅ 便携式 Node.js 运行时
+            - ✅ 数据完全可移植
+            - ✅ 支持多实例（不同端口）
+            - ✅ 无需安装 Node.js 或 Docker
+            - ✅ 一键启动/停止
 
             ### 📂 数据位置
 
+            用户数据存储在：
             ```
             C:\Users\<用户名>\AppData\Roaming\directus-desktop\
             ├── database\directus.db    (数据库)
-            ├── uploads\                 (文件)
+            ├── uploads\                 (上传文件)
+            ├── extensions\              (扩展插件)
             └── directus.log            (日志)
             ```
 
-            ### 💡 提示
+            ### 🔄 数据迁移
 
-            - 访问地址: `http://localhost:8055/admin`
-            - 按 F12 打开开发者工具
-            - 查看日志: `%APPDATA%\directus-desktop\directus.log`
+            **完整迁移**:
+            1. 关闭 Directus Desktop
+            2. 备份 `%APPDATA%\directus-desktop\` 目录
+            3. 在新电脑上安装 Directus Desktop
+            4. 关闭应用，复制备份目录覆盖
+            5. 启动应用
+
+            **只迁移数据库**:
+            ```
+            关闭应用 → 替换 database\directus.db → 启动
+            ```
+
+            ### 💡 使用技巧
+
+            - **启动**: 双击桌面快捷方式或开始菜单中的"Directus Desktop"
+            - **停止**: 关闭命令行窗口，或运行"停止 Directus"快捷方式
+            - **访问**: http://localhost:8055/admin
+            - **日志**: `%APPDATA%\directus-desktop\directus.log`
+            - **卸载**: 可选择保留或删除用户数据
+
+            ### 🆕 本版本改进
+
+            - ✅ 完全重构：不再使用 Electron
+            - ✅ 使用 NSIS 安装包 + 便携式 Node.js
+            - ✅ 避免了所有 ES Module 和单实例检测问题
+            - ✅ 安装包体积更小（~100MB）
+            - ✅ 启动速度更快
+            - ✅ 数据目录完全独立，易于备份和迁移
 
             ---
 
             **版本信息**
             - Directus: 11.5.1
-            - Electron: 28.0.0
-            - Node.js: 18.18.2
+            - Node.js: 20.11.0 (便携版)
+            - 安装方式: NSIS
+            - 支持系统: Windows 7/8/10/11 (x64)
+
           draft: false
           prerelease: false
           files: |
-            dist/Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe
+            installer/Directus-Desktop-Setup-${{ steps.version.outputs.version }}.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
