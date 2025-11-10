@@ -119,7 +119,16 @@ jobs:
           cp electron-app/preload.js preload.js
 
           # 复制 Directus 包装器到 directus-app 目录
-          cp electron-app/directus-wrapper.mjs directus-app/directus-wrapper.mjs
+          echo "Copying directus-wrapper.mjs..."
+          if [ -f "electron-app/directus-wrapper.mjs" ]; then
+            cp electron-app/directus-wrapper.mjs directus-app/directus-wrapper.mjs
+            echo "  ✓ Copied directus-wrapper.mjs"
+            ls -lh directus-app/directus-wrapper.mjs
+          else
+            echo "  ✗ ERROR: electron-app/directus-wrapper.mjs not found!"
+            ls -la electron-app/
+            exit 1
+          fi
 
           # 替换版本号
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" package.json
@@ -171,6 +180,12 @@ jobs:
           echo "Key files check:"
           if [ -f "directus-app/cli.js" ]; then
             echo "  ✓ cli.js"
+          fi
+          if [ -f "directus-app/directus-wrapper.mjs" ]; then
+            echo "  ✓ directus-wrapper.mjs"
+          else
+            echo "  ✗ directus-wrapper.mjs MISSING!"
+            exit 1
           fi
           if [ -f "directus-app/package.json" ]; then
             echo "  ✓ package.json"

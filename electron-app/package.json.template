@@ -50,12 +50,7 @@
       "!directus-app/**/*.test.{js,ts}"
     ],
     "asarUnpack": [
-      "directus-app/node_modules/better-sqlite3/**/*",
-      "directus-app/node_modules/sharp/**/*",
-      "directus-app/node_modules/argon2/**/*",
-      "directus-app/cli.js",
-      "directus-app/dist/**/*",
-      "directus-app/package.json"
+      "directus-app/**/*"
     ],
     "directories": {
       "output": "dist"
