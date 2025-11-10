@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Directus 启动包装器 - 直接运行 Directus CLI 的实际入口点
+// Directus 启动包装器 - 使用动态 import 加载 ES Module
 
-import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
@@ -13,8 +12,7 @@ console.log('=== Directus Wrapper Starting ===');
 console.log(`Working directory: ${__dirname}`);
 console.log(`Node version: ${process.version}`);
 
-// 找到 Directus 的实际 CLI 入口点（不是 .cmd 脚本）
-// 在 node_modules/directus/dist/cli/index.js 或类似位置
+// 找到 Directus 的实际 CLI 入口点
 const possibleCLIs = [
   join(__dirname, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
   join(__dirname, 'node_modules', 'directus', 'dist', 'cli.js'),
@@ -38,41 +36,32 @@ if (!cliPath) {
   process.exit(1);
 }
 
-// 使用当前的 Node.js 进程（Electron 以 ELECTRON_RUN_AS_NODE 模式运行）
-// 来启动 Directus CLI
-const args = [cliPath, 'start'];
+// 关键修复：使用动态 import() 来加载 ES Module
+// 这样可以正确处理 .js 文件的 ES Module
+console.log(`Loading Directus CLI via dynamic import...`);
 
-console.log(`Executing: ${process.execPath} ${args.join(' ')}`);
+// 设置命令行参数，让 Directus CLI 认为是从命令行启动的
+process.argv = [
+  process.argv[0],  // node 路径
+  cliPath,          // CLI 脚本路径
+  'start'           // 命令
+];
 
-const child = spawn(process.execPath, args, {
-  cwd: __dirname,
-  env: {
-    ...process.env,
-    ELECTRON_RUN_AS_NODE: '1'  // 确保子进程也以 Node 模式运行
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-  windowsHide: true
-});
+try {
+  // 动态导入 CLI 模块
+  // 使用 file:// URL 协议确保正确解析路径
+  const cliUrl = `file:///${cliPath.replace(/\\/g, '/')}`;
+  console.log(`Import URL: ${cliUrl}`);
 
-// 转发输出
-child.stdout.on('data', (data) => {
-  process.stdout.write(data);
-});
+  await import(cliUrl);
 
-child.stderr.on('data', (data) => {
-  process.stderr.write(data);
-});
-
-child.on('error', (err) => {
-  console.error('Failed to start Directus:', err);
+  // CLI 通常会接管进程，所以这里不应该到达
+  console.log('Directus CLI imported successfully');
+} catch (error) {
+  console.error('Failed to load Directus CLI:', error);
+  console.error('Error details:', error.message);
+  if (error.stack) {
+    console.error('Stack trace:', error.stack);
+  }
   process.exit(1);
-});
-
-child.on('exit', (code) => {
-  console.log(`Directus exited with code ${code}`);
-  process.exit(code || 0);
-});
-
-// 信号处理
-process.on('SIGTERM', () => child.kill('SIGTERM'));
-process.on('SIGINT', () => child.kill('SIGINT'));
+}

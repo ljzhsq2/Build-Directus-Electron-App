@@ -47,14 +47,23 @@ jobs:
           echo "=== Ensure package.json has type:module ==="
           # 确保 Directus 的 package.json 包含 "type": "module"
           if [ -f "directus-app/package.json" ]; then
-            # 检查是否已经有 type 字段
-            if ! grep -q '"type"' directus-app/package.json; then
-              # 添加 "type": "module" 到 package.json
-              sed -i '2i\  "type": "module",' directus-app/package.json
-              echo "✓ Added type:module to package.json"
+            # 先删除已存在的 type 字段（如果有的话）
+            sed -i '/"type":/d' directus-app/package.json
+
+            # 在第二行插入 "type": "module"
+            sed -i '2i\  "type": "module",' directus-app/package.json
+
+            echo "✓ Set type:module in package.json"
+
+            # 验证
+            if grep -q '"type": "module"' directus-app/package.json; then
+              echo "  ✓ Verified: type is set to module"
             else
-              echo "✓ package.json already has type field"
+              echo "  ✗ ERROR: Failed to set type to module"
+              head -10 directus-app/package.json
             fi
+          else
+            echo "✗ package.json not found!"
           fi
 
           echo "=== Disable Directus Singleton Check ==="
