@@ -9,6 +9,9 @@
   },
   "author": "Directus Desktop",
   "license": "MIT",
+  "dependencies": {
+    "electron-updater": "^6.1.7"
+  },
   "devDependencies": {
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1"
@@ -16,6 +19,10 @@
   "build": {
     "appId": "com.directus.desktop",
     "productName": "Directus",
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    },
     "win": {
       "target": [
         {
@@ -28,14 +35,27 @@
       "main.js",
       "preload.js",
       "directus-app/**/*",
-      "!directus-app/node_modules/**/{CHANGELOG.md,README.md,README,readme.md,readme}",
-      "!directus-app/node_modules/**/{test,__tests__,tests,powered-test,example,examples}",
+      "!directus-app/node_modules/**/{CHANGELOG*,README*,readme*,LICENSE*,license*}",
+      "!directus-app/node_modules/**/{test,__tests__,tests,__test__,powered-test}",
+      "!directus-app/node_modules/**/{example,examples,demo,demos,sample,samples}",
+      "!directus-app/node_modules/**/*.{md,MD,markdown,txt,TXT}",
       "!directus-app/node_modules/**/*.d.ts",
+      "!directus-app/node_modules/**/*.map",
+      "!directus-app/node_modules/**/.{git,github,gitignore,eslintrc,prettierrc}",
       "!directus-app/node_modules/.bin",
-      "!directus-app/**/.git"
+      "!directus-app/**/.git*",
+      "!directus-app/**/.DS_Store",
+      "!directus-app/**/tsconfig.json",
+      "!directus-app/**/*.spec.{js,ts}",
+      "!directus-app/**/*.test.{js,ts}"
     ],
     "asarUnpack": [
-      "directus-app/**/*"
+      "directus-app/node_modules/better-sqlite3/**/*",
+      "directus-app/node_modules/sharp/**/*",
+      "directus-app/node_modules/argon2/**/*",
+      "directus-app/cli.js",
+      "directus-app/dist/**/*",
+      "directus-app/package.json"
     ],
     "directories": {
       "output": "dist"

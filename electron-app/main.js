@@ -2,11 +2,70 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 let directusProcess;
 const PORT = 8055;
 let startupLogs = [];
+
+// 配置自动更新
+autoUpdater.autoDownload = false;  // 手动控制下载
+autoUpdater.autoInstallOnAppQuit = true;  // 退出时自动安装
+
+autoUpdater.on('update-available', (info) => {
+  log(`New version available: ${info.version}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '发现新版本',
+      message: `发现新版本 ${info.version}，是否现在下载？`,
+      buttons: ['下载', '稍后'],
+      defaultId: 0,
+      cancelId: 1
+    }).then((result) => {
+      if (result.response === 0) {
+        autoUpdater.downloadUpdate();
+        log('User chose to download update');
+      }
+    });
+  }
+});
+
+autoUpdater.on('update-not-available', () => {
+  log('No updates available');
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+  const msg = `下载进度: ${progressObj.percent.toFixed(1)}%`;
+  log(msg);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setProgressBar(progressObj.percent / 100);
+  }
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  log(`Update downloaded: ${info.version}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setProgressBar(-1);  // 清除进度条
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '更新已下载',
+      message: `新版本 ${info.version} 已下载完成，重启应用后即可安装。`,
+      buttons: ['立即重启', '稍后'],
+      defaultId: 0,
+      cancelId: 1
+    }).then((result) => {
+      if (result.response === 0) {
+        autoUpdater.quitAndInstall();
+      }
+    });
+  }
+});
+
+autoUpdater.on('error', (err) => {
+  log(`Update error: ${err.message}`);
+});
 
 function log(msg) {
   const timestamp = new Date().toISOString();
@@ -176,6 +235,9 @@ function startDirectus() {
     DB_CLIENT: 'sqlite3',
     DB_FILENAME: dbPath,
 
+    // 性能优化：使用 WAL 模式
+    DB_SQLITE_USE_WAL: 'true',
+
     // 存储配置
     STORAGE_LOCATIONS: 'local',
     STORAGE_LOCAL_ROOT: path.join(userDataPath, 'uploads'),
@@ -194,8 +256,14 @@ function startDirectus() {
     // 禁用遥测
     TELEMETRY: 'false',
 
+    // 性能优化
     NODE_ENV: 'production',
-    LOG_LEVEL: 'info'
+    LOG_LEVEL: 'warn',  // 减少日志输出，提升性能
+
+    // 缓存配置
+    CACHE_ENABLED: 'true',
+    CACHE_STORE: 'memory',
+    CACHE_TTL: '10m'
   };
 
   log(`Starting Directus: node "${directusCliPath}" start`);
@@ -414,8 +482,24 @@ app.on('ready', () => {
   log(`Resources path: ${process.resourcesPath}`);
   log(`User data: ${app.getPath('userData')}`);
 
+  // 并行启动：Directus 和窗口同时创建
   startDirectus();
-  setTimeout(createWindow, 2000);
+  createWindow();  // 不等待 2 秒，直接创建窗口
+
+  // 5 秒后开始健康检查（减少等待时间）
+  setTimeout(() => {
+    checkDirectusReady();
+  }, 5000);
+
+  // 10 秒后检查更新（不阻塞启动）
+  setTimeout(() => {
+    if (app.isPackaged) {  // 只在打包后的应用中检查更新
+      log('Checking for updates...');
+      autoUpdater.checkForUpdates().catch((err) => {
+        log(`Check for updates error: ${err.message}`);
+      });
+    }
+  }, 10000);
 
   const { globalShortcut } = require('electron');
   globalShortcut.register('F12', () => {
