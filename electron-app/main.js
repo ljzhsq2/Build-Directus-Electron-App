@@ -288,7 +288,9 @@ function createWindow() {
         </div>
       </body>
     </html>
-  `)}`)  mainWindow.once('ready-to-show', () => {
+  `)}`)
+
+  mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
 
