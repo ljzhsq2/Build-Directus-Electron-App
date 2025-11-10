@@ -274,11 +274,11 @@ function startDirectus() {
     // 缓存配置
     CACHE_ENABLED: 'true',
     CACHE_STORE: 'memory',
-    CACHE_TTL: '10m',
-
-    // 关键：让子进程以纯 Node.js 模式运行，避免 Electron 单实例检测
-    ELECTRON_RUN_AS_NODE: '1'
+    CACHE_TTL: '10m'
   };
+
+  // 移除可能导致冲突的 Electron 环境变量
+  delete env.ELECTRON_RUN_AS_NODE;
 
   log(`Starting Directus: node "${directusCliPath}" start`);
   log(`Working directory: ${directusAppPath}`);
