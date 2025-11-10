@@ -118,6 +118,9 @@ jobs:
           cp electron-app/main.js main.js
           cp electron-app/preload.js preload.js
 
+          # 复制 Directus 包装器到 directus-app 目录
+          cp electron-app/directus-wrapper.mjs directus-app/directus-wrapper.mjs
+
           # 替换版本号
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" package.json
 
@@ -125,6 +128,7 @@ jobs:
           echo "  - package.json (version: ${VERSION})"
           echo "  - main.js"
           echo "  - preload.js"
+          echo "  - directus-wrapper.mjs → directus-app/"
           echo ""
           echo "✅ Electron app structure created successfully"
 

@@ -139,22 +139,29 @@ function getDirectusPath() {
 }
 
 function findDirectusCLI(directusAppPath) {
-  // 可能的 CLI 路径（按优先级排序）
+  // 使用我们的包装器，它可以正确加载 ES Module
+  const wrapperPath = path.join(directusAppPath, 'directus-wrapper.mjs');
+
+  log('Searching for Directus CLI...');
+  log(`  Checking wrapper: ${wrapperPath}`);
+
+  if (fs.existsSync(wrapperPath)) {
+    log(`  ✓ Found wrapper at: ${wrapperPath}`);
+    return wrapperPath;
+  }
+
+  // 备用方案：可能的 CLI 路径
   const possiblePaths = [
-    // 优先查找编译后的 CommonJS 版本
     path.join(directusAppPath, 'dist', 'start.js'),
     path.join(directusAppPath, 'dist', 'index.js'),
     path.join(directusAppPath, 'dist', 'cli', 'index.js'),
     path.join(directusAppPath, 'dist', 'cli.js'),
-    // 然后是 bin 目录
     path.join(directusAppPath, 'node_modules', '.bin', 'directus'),
     path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'cli', 'index.js'),
     path.join(directusAppPath, 'node_modules', 'directus', 'dist', 'start.js'),
-    // 最后才是 ESM 的 cli.js
     path.join(directusAppPath, 'cli.js')
   ];
 
-  log('Searching for Directus CLI...');
   for (const cliPath of possiblePaths) {
     log(`  Checking: ${cliPath}`);
     if (fs.existsSync(cliPath)) {
@@ -175,7 +182,6 @@ function findDirectusCLI(directusAppPath) {
       log(`  [${type}] ${item}`);
     });
 
-    // 如果有 dist 目录，也列出其内容
     const distPath = path.join(directusAppPath, 'dist');
     if (fs.existsSync(distPath)) {
       log('Contents of dist/ directory:');
