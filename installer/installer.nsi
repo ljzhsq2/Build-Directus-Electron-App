@@ -27,8 +27,12 @@ SetCompressor /SOLID lzma
 ; 界面设置
 ; ===================================================================
 !define MUI_ABORTWARNING
-!define MUI_ICON "icon.ico"
-!define MUI_UNICON "icon.ico"
+
+; 如果 icon.ico 存在则使用，否则使用默认图标
+!ifexist "icon.ico"
+  !define MUI_ICON "icon.ico"
+  !define MUI_UNICON "icon.ico"
+!endif
 
 ; 欢迎页面
 !insertmacro MUI_PAGE_WELCOME

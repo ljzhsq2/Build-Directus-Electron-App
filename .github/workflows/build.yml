@@ -107,24 +107,31 @@ jobs:
           Write-Host "Structure:"
           Get-ChildItem "installer\runtime" | ForEach-Object { Write-Host "  - $($_.Name)" }
 
-      - name: Create icon (placeholder)
+      - name: Download icon (optional)
         shell: pwsh
         run: |
           Write-Host "================================================"
-          Write-Host "  Creating Icon"
+          Write-Host "  Downloading Icon"
           Write-Host "================================================"
           Write-Host ""
 
-          # 检查是否有 icon.ico
-          if (Test-Path "installer\icon.ico") {
-            Write-Host "✓ icon.ico already exists"
-          } else {
-            Write-Host "⚠ No icon.ico found"
-            Write-Host "  Creating placeholder..."
-            # 创建一个空的 .ico 文件（NSIS 需要）
-            # 在实际生产中，应该提供真实的图标
-            New-Item -ItemType File -Path "installer\icon.ico" -Force | Out-Null
-            Write-Host "  ✓ Placeholder created"
+          # 尝试下载 Directus 图标
+          try {
+            $iconUrl = "https://raw.githubusercontent.com/directus/directus/main/app/public/favicon.ico"
+            Write-Host "Downloading Directus favicon..."
+            Invoke-WebRequest -Uri $iconUrl -OutFile "installer\icon.ico" -ErrorAction Stop
+
+            # 验证文件不为空
+            $iconSize = (Get-Item "installer\icon.ico").Length
+            if ($iconSize -gt 0) {
+              Write-Host "✓ Icon downloaded successfully ($iconSize bytes)"
+            } else {
+              Write-Host "⚠ Downloaded icon is empty, removing..."
+              Remove-Item "installer\icon.ico" -Force
+            }
+          } catch {
+            Write-Host "⚠ Could not download icon: $($_.Exception.Message)"
+            Write-Host "  Will use NSIS default icon"
           }
 
       - name: Install NSIS
