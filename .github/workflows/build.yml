@@ -1,4 +1,4 @@
-name: Build Directus Electron App
+name: Build Directus 11.5.1 Electron App
 
 on:
   push:
@@ -11,98 +11,11 @@ on:
         required: true
         default: '1.0.0'
 
-# 添加权限配置
 permissions:
-  contents: write  # 允许创建 Release 和上传文件
+  contents: write
 
 jobs:
-  extract-directus:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Extract Directus from Docker
-        run: |
-          echo "=== Extracting Directus from Docker ==="
-          docker pull directus/directus:11.5.1
-
-          docker create --name directus-temp directus/directus:11.5.1
-          mkdir -p directus-app-temp
-
-          # 提取文件（容忍符号链接错误）
-          docker cp directus-temp:/directus/. ./directus-app-temp/ || true
-          docker rm directus-temp
-
-          echo "=== Resolving Symlinks ==="
-          mkdir -p directus-app
-
-          # 使用 rsync 解析符号链接（Ubuntu 自带 rsync）
-          rsync -aL --ignore-errors directus-app-temp/ directus-app/ 2>/dev/null || {
-            echo "Some symlinks could not be resolved, continuing..."
-          }
-          rm -rf directus-app-temp
-
-          # 清理残留符号链接
-          find directus-app -type l -delete 2>/dev/null || true
-
-          echo "=== Ensure package.json has type:module ==="
-          # 确保 Directus 的 package.json 包含 "type": "module"
-          if [ -f "directus-app/package.json" ]; then
-            # 先删除已存在的 type 字段（如果有的话）
-            sed -i '/"type":/d' directus-app/package.json
-
-            # 在第二行插入 "type": "module"
-            sed -i '2i\  "type": "module",' directus-app/package.json
-
-            echo "✓ Set type:module in package.json"
-
-            # 验证
-            if grep -q '"type": "module"' directus-app/package.json; then
-              echo "  ✓ Verified: type is set to module"
-            else
-              echo "  ✗ ERROR: Failed to set type to module"
-              head -10 directus-app/package.json
-            fi
-          else
-            echo "✗ package.json not found!"
-          fi
-
-          echo "=== Disable Directus Singleton Check ==="
-          # 查找并禁用 Directus CLI 的单实例检测
-          # 通常在 cli.js 或 dist/cli/index.js 中
-          for file in directus-app/cli.js directus-app/dist/cli.js directus-app/dist/cli/index.js directus-app/dist/cli/run.js; do
-            if [ -f "$file" ]; then
-              echo "Checking $file for singleton detection..."
-              # 查找常见的单实例检测模式并注释掉
-              # 模式1: app.requestSingleInstanceLock()
-              # 模式2: 检查锁文件
-              # 模式3: 进程检测
-              sed -i 's/process\.exit(1);.*singleton/\/\/ process.exit(1); \/\/ Disabled singleton check/gi' "$file" 2>/dev/null || true
-              sed -i 's/process\.exit(0);.*instance.*running/\/\/ process.exit(0); \/\/ Disabled singleton check/gi' "$file" 2>/dev/null || true
-              sed -i 's/console\.log.*Another instance.*running/\/\/ Disabled singleton warning/gi' "$file" 2>/dev/null || true
-              echo "  ✓ Processed $file"
-            fi
-          done
-
-          # 搜索包含 "instance" 和 "running" 的文件
-          echo "Searching for singleton detection code..."
-          grep -r "Another instance" directus-app/ 2>/dev/null | head -5 || echo "  No obvious singleton messages found"
-
-          echo "=== Packaging ==="
-          tar -czf directus-files.tar.gz directus-app
-
-          FILE_COUNT=$(find directus-app -type f | wc -l)
-          echo "✅ Packaged $FILE_COUNT files"
-          ls -lh directus-files.tar.gz
-
-      - name: Upload Directus files
-        uses: actions/upload-artifact@v4
-        with:
-          name: directus-files
-          path: directus-files.tar.gz
-          retention-days: 1
-
   build-windows:
-    needs: extract-directus
     runs-on: windows-latest
 
     steps:
@@ -114,130 +27,113 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Download Directus files
-        uses: actions/download-artifact@v4
-        with:
-          name: directus-files
-
-      - name: Extract Directus files
+      - name: Install Directus 11.5.1
         shell: bash
         run: |
-          echo "=== Extracting Directus archive ==="
-          tar -xzf directus-files.tar.gz
+          echo "═══════════════════════════════════════════════"
+          echo "  Installing Directus 11.5.1"
+          echo "═══════════════════════════════════════════════"
 
-          FILE_COUNT=$(find directus-app -type f | wc -l)
-          echo "✅ Extracted $FILE_COUNT files"
+          cd directus-app
 
-          # 验证关键文件
-          if [ -f "directus-app/cli.js" ] || [ -f "directus-app/dist/cli.js" ]; then
-            echo "✓ CLI found"
+          echo ""
+          echo "📦 Running npm install..."
+          npm install --production
+
+          echo ""
+          echo "✓ Installation complete"
+          echo ""
+          echo "Verifying installation:"
+          ls -lh node_modules/directus/
+
+          if [ -f "node_modules/directus/cli.js" ]; then
+            echo "  ✓ Directus CLI found"
           else
-            echo "⚠️ Warning: CLI entry point not obvious"
+            echo "  ❌ Directus CLI not found!"
+            exit 1
           fi
 
-      - name: Copy Electron app files
+          echo ""
+          echo "Checking package.json type:"
+          if [ -f "node_modules/directus/package.json" ]; then
+            grep '"type"' node_modules/directus/package.json || echo "  (no type field)"
+          fi
+
+      - name: Prepare Electron app
         shell: bash
         run: |
-          echo "=== Copying Electron App Files from Repository ==="
+          echo "═══════════════════════════════════════════════"
+          echo "  Preparing Electron Application"
+          echo "═══════════════════════════════════════════════"
 
           # 获取版本号
           VERSION="${{ github.event.inputs.version || '1.0.0' }}"
+          echo "Version: ${VERSION}"
 
-          # 复制配置文件
+          # 复制 Electron 配置
           cp electron-app/package.json.template package.json
           cp electron-app/main.js main.js
           cp electron-app/preload.js preload.js
 
-          # 复制 Directus 包装器到 directus-app 目录
-          echo "Copying directus-wrapper.mjs..."
-          if [ -f "electron-app/directus-wrapper.mjs" ]; then
-            cp electron-app/directus-wrapper.mjs directus-app/directus-wrapper.mjs
-            echo "  ✓ Copied directus-wrapper.mjs"
-            ls -lh directus-app/directus-wrapper.mjs
-          else
-            echo "  ✗ ERROR: electron-app/directus-wrapper.mjs not found!"
-            ls -la electron-app/
-            exit 1
-          fi
-
           # 替换版本号
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" package.json
 
-          echo "✓ Copied and configured all Electron files"
-          echo "  - package.json (version: ${VERSION})"
-          echo "  - main.js"
-          echo "  - preload.js"
-          echo "  - directus-wrapper.mjs → directus-app/"
+          # 复制图标（如果存在）
+          if [ -f "electron-app/icon.ico" ]; then
+            cp electron-app/icon.ico icon.ico
+          fi
+
           echo ""
-          echo "✅ Electron app structure created successfully"
+          echo "✓ Electron app structure ready"
+          echo ""
+          echo "Structure:"
+          ls -lh
 
-      - name: Create default icon
-        shell: pwsh
-        run: |
-          Write-Host "=== Creating default icon ==="
-          # 在 Windows 上,我们可以使用 PowerShell 创建一个基本的 ICO 文件
-          # 或者从项目中复制,如果不存在则 electron-builder 使用默认图标
-
-          # 检查是否有图标文件在仓库中
-          if (Test-Path "icon.ico") {
-            Write-Host "✓ icon.ico already exists in repository"
-          } elseif (Test-Path "assets/icon.ico") {
-            Copy-Item "assets/icon.ico" "icon.ico"
-            Write-Host "✓ Copied icon.ico from assets/"
-          } else {
-            Write-Host "⚠️ No icon.ico found. Electron-builder will use default Electron icon."
-            Write-Host "   To use a custom icon, add icon.ico to the repository root or assets/ folder"
-          }
-
-      - name: Verify directus-app before build
+      - name: Verify build structure
         shell: bash
         run: |
-          echo "=== Final Verification Before Build ==="
+          echo "═══════════════════════════════════════════════"
+          echo "  Final Structure Verification"
+          echo "═══════════════════════════════════════════════"
 
-          if [ ! -d "directus-app" ]; then
-            echo "❌ ERROR: directus-app not found!"
-            ls -la
+          echo ""
+          echo "Root files:"
+          ls -lh *.js *.json 2>/dev/null || true
+
+          echo ""
+          echo "directus-app/ contents:"
+          ls -lh directus-app/
+
+          echo ""
+          echo "Checking critical files:"
+
+          files=(
+            "package.json"
+            "main.js"
+            "preload.js"
+            "directus-app/server.js"
+            "directus-app/package.json"
+            "directus-app/node_modules/directus/cli.js"
+          )
+
+          all_good=true
+          for file in "${files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "  ✓ $file"
+            else
+              echo "  ❌ $file MISSING!"
+              all_good=false
+            fi
+          done
+
+          if [ "$all_good" = false ]; then
+            echo ""
+            echo "❌ Some required files are missing!"
             exit 1
           fi
 
-          echo "✓ directus-app exists"
           echo ""
-
-          echo "Size:"
-          du -sh directus-app || echo "Size: $(find directus-app -type f | wc -l) files"
-          echo ""
-
-          echo "Key files check:"
-          if [ -f "directus-app/cli.js" ]; then
-            echo "  ✓ cli.js"
-          fi
-          if [ -f "directus-app/directus-wrapper.mjs" ]; then
-            echo "  ✓ directus-wrapper.mjs"
-          else
-            echo "  ✗ directus-wrapper.mjs MISSING!"
-            exit 1
-          fi
-          if [ -f "directus-app/package.json" ]; then
-            echo "  ✓ package.json"
-          fi
-          if [ -d "directus-app/node_modules" ]; then
-            echo "  ✓ node_modules"
-          fi
-
-          echo ""
-          echo "Build config check:"
-          if [ -f "package.json" ]; then
-            echo "  ✓ package.json (Electron)"
-          fi
-          if [ -f "main.js" ]; then
-            echo "  ✓ main.js"
-          fi
-          if [ -f "preload.js" ]; then
-            echo "  ✓ preload.js"
-          fi
-
-          echo ""
-          echo "✅ All required files present, ready to build"
+          echo "✅ All files present, ready to build"
 
       - name: Install Electron dependencies
         run: npm install
@@ -250,26 +146,29 @@ jobs:
       - name: Verify build output
         shell: bash
         run: |
-          echo "=== Build Output Verification ==="
+          echo "═══════════════════════════════════════════════"
+          echo "  Build Output Verification"
+          echo "═══════════════════════════════════════════════"
+
           echo ""
           echo "dist/ contents:"
           ls -lh dist/
+
           echo ""
-          
-          # 检查是否有可执行文件
           EXE_COUNT=$(find dist -name "*.exe" -type f | wc -l)
-          echo "Found $EXE_COUNT .exe file(s)"
-          
+          echo "Found ${EXE_COUNT} .exe file(s)"
+
           if [ $EXE_COUNT -eq 0 ]; then
-            echo "❌ ERROR: No .exe installer found!"
             echo ""
-            echo "Looking for other files:"
+            echo "❌ ERROR: No installer found!"
+            echo ""
+            echo "All files in dist/:"
             find dist -type f
             exit 1
           fi
-          
+
           echo ""
-          echo "✅ Build verification passed"
+          echo "✅ Build successful"
 
       - name: Get version
         id: version
@@ -281,25 +180,23 @@ jobs:
             VERSION="${{ github.event.inputs.version }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
+          echo "Version: $VERSION"
 
-      - name: Rename and prepare installer
-        id: prepare
+      - name: Prepare release files
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cd dist
-          
-          # 找到生成的 exe 安装包
-          INSTALLER_FILE=$(find . -maxdepth 1 -name "*.exe" -type f | head -n 1)
-          
-          if [ -n "$INSTALLER_FILE" ]; then
+
+          # 重命名安装包
+          INSTALLER=$(find . -maxdepth 1 -name "*.exe" -type f | head -n 1)
+
+          if [ -n "$INSTALLER" ]; then
             NEW_NAME="Directus-Desktop-${VERSION}-Windows-x64-Setup.exe"
-            mv "$INSTALLER_FILE" "$NEW_NAME"
-            echo "✅ Renamed installer to: $NEW_NAME"
-            echo "installer_name=$NEW_NAME" >> $GITHUB_OUTPUT
+            mv "$INSTALLER" "$NEW_NAME"
+            echo "✓ Renamed to: $NEW_NAME"
           else
-            echo "❌ No installer file found!"
+            echo "❌ No installer found!"
             exit 1
           fi
 
@@ -310,77 +207,52 @@ jobs:
           name: Directus Desktop v${{ steps.version.outputs.version }}
           body: |
             ## 🎉 Directus Desktop v${{ steps.version.outputs.version }}
-            
-            基于 **Directus 11.5.1** 的 Windows 桌面版本
-            
-            ### 📥 下载与安装
-            
-            1. ⬇️ 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe`
-            2. 🖱️ 双击运行安装程序
-            3. ⏱️ 首次启动等待 10-15 秒初始化数据库
-            4. 🎊 开始使用！
-            
+
+            基于 **Directus 11.5.1** 的 Windows 桌面应用
+
+            ### 📥 安装
+
+            1. 下载 `Directus-Desktop-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe`
+            2. 双击运行安装程序
+            3. 首次启动等待约 10 秒初始化数据库
+            4. 开始使用！
+
             ### 🔐 默认管理员账号
-            
-            首次访问时使用以下账号登录：
-            - **邮箱**：`admin@example.com`
-            - **密码**：`admin`
-            
-            ⚠️ **重要**：登录后请立即修改密码！
-            
-            ### ✨ 功能特性
-            
-            - ✅ 完整的 Directus CMS 功能
-            - ✅ 内置 SQLite 数据库（无需额外配置）
-            - ✅ 数据自动保存到用户目录
-            - ✅ 支持文件上传和管理
+
+            - **邮箱**: `admin@example.com`
+            - **密码**: `admin`
+
+            ⚠️ **请在首次登录后立即修改密码！**
+
+            ### ✨ 特性
+
+            - ✅ 完整的 Directus 11.5.1 CMS 功能
+            - ✅ 内置 SQLite 数据库
+            - ✅ 自动更新支持
             - ✅ 完全离线可用
-            - ✅ 一键启动，开箱即用
-            - ✅ 详细的启动日志（按 F12 查看实时日志）
-            
-            ### 📂 数据存储位置
-            
-            所有数据保存在：
+            - ✅ 一键启动
+
+            ### 📂 数据位置
+
             ```
-            C:\Users\<你的用户名>\AppData\Roaming\directus-desktop\
-            ├── database\
-            │   └── directus.db      (数据库文件)
-            ├── uploads\             (上传的文件)
-            ├── extensions\          (扩展插件)
-            └── directus.log         (启动日志)
+            C:\Users\<用户名>\AppData\Roaming\directus-desktop\
+            ├── database\directus.db    (数据库)
+            ├── uploads\                 (文件)
+            └── directus.log            (日志)
             ```
-            
-            ### 💡 使用提示
-            
-            - 访问地址：`http://localhost:8055/admin`
-            - 启动时会显示实时日志，方便排查问题
-            - 按 F12 可以打开开发者工具查看详细信息
-            - 关闭窗口即停止服务
-            - 卸载不会删除数据，需手动删除上述目录
-            
-            ### 🐛 遇到问题？
-            
-            1. **查看日志**：`C:\Users\<用户名>\AppData\Roaming\directus-desktop\directus.log`
-            2. **端口占用**：确保 8055 端口未被占用
-            3. **重置数据**：删除 `directus.db` 文件重新初始化
-            4. **提交 Issue**：附上日志文件内容
-            
-            ### 🔧 本次更新
-            
-            - ✅ 修复了 Docker 文件提取和打包问题
-            - ✅ 优化了路径查找逻辑，支持多种 CLI 位置
-            - ✅ 添加了详细的启动日志和错误提示
-            - ✅ 改进了 electron-builder 配置，确保文件正确打包
-            - ✅ 加强了目录验证和错误处理
-            
+
+            ### 💡 提示
+
+            - 访问地址: `http://localhost:8055/admin`
+            - 按 F12 打开开发者工具
+            - 查看日志: `%APPDATA%\directus-desktop\directus.log`
+
             ---
-            
-            📦 **文件信息**
-            - 版本：v${{ steps.version.outputs.version }}
-            - Directus 版本：11.5.1
-            - 架构：Windows x64
-            - 安装包大小：~150MB
-            - 安装后大小：~300MB
+
+            **版本信息**
+            - Directus: 11.5.1
+            - Electron: 28.0.0
+            - Node.js: 18.18.2
           draft: false
           prerelease: false
           files: |
