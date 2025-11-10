@@ -28,11 +28,9 @@ SetCompressor /SOLID lzma
 ; ===================================================================
 !define MUI_ABORTWARNING
 
-; 如果 icon.ico 存在则使用，否则使用默认图标
-!ifexist "icon.ico"
-  !define MUI_ICON "icon.ico"
-  !define MUI_UNICON "icon.ico"
-!endif
+; 尝试使用自定义图标，如果不存在则跳过（NSIS 会使用默认图标）
+; 注意：在 NSIS 中，如果文件不存在，编译时会出错
+; 所以我们在 GitHub Actions 中确保始终有一个图标文件
 
 ; 欢迎页面
 !insertmacro MUI_PAGE_WELCOME

@@ -107,32 +107,61 @@ jobs:
           Write-Host "Structure:"
           Get-ChildItem "installer\runtime" | ForEach-Object { Write-Host "  - $($_.Name)" }
 
-      - name: Download icon (optional)
+      - name: Create default icon
         shell: pwsh
         run: |
           Write-Host "================================================"
-          Write-Host "  Downloading Icon"
+          Write-Host "  Creating Icon"
           Write-Host "================================================"
           Write-Host ""
 
-          # 尝试下载 Directus 图标
+          # 方案1: 尝试下载 Directus 图标
           try {
             $iconUrl = "https://raw.githubusercontent.com/directus/directus/main/app/public/favicon.ico"
             Write-Host "Downloading Directus favicon..."
             Invoke-WebRequest -Uri $iconUrl -OutFile "installer\icon.ico" -ErrorAction Stop
 
-            # 验证文件不为空
             $iconSize = (Get-Item "installer\icon.ico").Length
             if ($iconSize -gt 0) {
               Write-Host "✓ Icon downloaded successfully ($iconSize bytes)"
+              return
             } else {
-              Write-Host "⚠ Downloaded icon is empty, removing..."
-              Remove-Item "installer\icon.ico" -Force
+              Remove-Item "installer\icon.ico" -Force -ErrorAction SilentlyContinue
             }
           } catch {
             Write-Host "⚠ Could not download icon: $($_.Exception.Message)"
-            Write-Host "  Will use NSIS default icon"
           }
+
+          # 方案2: 使用 PowerShell 创建一个简单的 ICO 文件
+          Write-Host "Creating a basic icon using PowerShell..."
+
+          # ICO 文件的最小结构（16x16 单色图标）
+          $iconBytes = @(
+            0x00, 0x00,       # Reserved
+            0x01, 0x00,       # Type (1 = ICO)
+            0x01, 0x00,       # Count (1 image)
+            0x10,             # Width (16)
+            0x10,             # Height (16)
+            0x00,             # Color count (0 = >256)
+            0x00,             # Reserved
+            0x01, 0x00,       # Color planes
+            0x20, 0x00,       # Bits per pixel (32)
+            0x68, 0x04, 0x00, 0x00,  # Image size
+            0x16, 0x00, 0x00, 0x00   # Image offset
+          )
+
+          # 添加图像数据（简单的蓝色图标）
+          $imageData = New-Object byte[] 1128
+          for ($i = 0; $i -lt 256; $i++) {
+            $imageData[$i*4] = 0xFF     # Blue
+            $imageData[$i*4+1] = 0x00   # Green
+            $imageData[$i*4+2] = 0x00   # Red
+            $imageData[$i*4+3] = 0xFF   # Alpha
+          }
+
+          [System.IO.File]::WriteAllBytes("$(Get-Location)\installer\icon.ico", $iconBytes + $imageData)
+
+          Write-Host "✓ Basic icon created"
 
       - name: Install NSIS
         shell: pwsh
