@@ -263,16 +263,22 @@ function startDirectus() {
     // 缓存配置
     CACHE_ENABLED: 'true',
     CACHE_STORE: 'memory',
-    CACHE_TTL: '10m'
+    CACHE_TTL: '10m',
+
+    // 关键：让子进程以纯 Node.js 模式运行，避免 Electron 单实例检测
+    ELECTRON_RUN_AS_NODE: '1'
   };
 
   log(`Starting Directus: node "${directusCliPath}" start`);
   log(`Working directory: ${directusAppPath}`);
 
+  // 使用 Electron 的 node 运行 Directus
+  // ELECTRON_RUN_AS_NODE=1 让子进程以纯 Node.js 模式运行
   directusProcess = spawn(process.execPath, [directusCliPath, 'start'], {
     env: env,
     cwd: directusAppPath,
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true  // Windows 上隐藏控制台窗口
   });
 
   directusProcess.stdout.on('data', (data) => {

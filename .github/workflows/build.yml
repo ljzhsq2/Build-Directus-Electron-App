@@ -183,7 +183,7 @@ jobs:
       - name: Build Electron app
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build
+        run: npm run build -- --publish always
 
       - name: Verify build output
         shell: bash
