@@ -109,6 +109,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: '**/package.json'
 
       - name: Download Directus files
         uses: actions/download-artifact@v4
@@ -167,12 +169,15 @@ jobs:
         shell: bash
         run: |
           echo "=== Creating Electron App Structure ==="
-          
+
+          # 获取版本号
+          VERSION="${{ github.event.inputs.version || '1.0.0' }}"
+
           # 创建 package.json
-          cat > package.json << 'EOF'
+          cat > package.json << EOF
 {
   "name": "directus-desktop",
-  "version": "${{ github.event.inputs.version || '1.0.0' }}",
+  "version": "${VERSION}",
   "description": "Directus Desktop Application for Windows",
   "main": "main.js",
   "scripts": {
@@ -194,13 +199,11 @@ jobs:
           "target": "nsis",
           "arch": ["x64"]
         }
-      ],
-      "icon": "icon.ico"
+      ]
     },
     "files": [
       "main.js",
       "preload.js",
-      "icon.ico",
       "directus-app/**/*",
       "!directus-app/node_modules/**/{CHANGELOG.md,README.md,README,readme.md,readme}",
       "!directus-app/node_modules/**/{test,__tests__,tests,powered-test,example,examples}",
@@ -488,7 +491,8 @@ function showErrorDialog(title, message) {
 }
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const iconPath = path.join(__dirname, 'icon.ico');
+  const windowOptions = {
     width: 1400,
     height: 900,
     webPreferences: {
@@ -496,9 +500,15 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     },
-    icon: path.join(__dirname, 'icon.ico'),
     show: false
-  });
+  };
+
+  // 只有在图标文件存在时才设置
+  if (fs.existsSync(iconPath)) {
+    windowOptions.icon = iconPath;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
     <!DOCTYPE html>
@@ -550,7 +560,7 @@ function createWindow() {
             function showLogs() {
               if (window.electronAPI) {
                 const userDataPath = window.electronAPI.getAppPath();
-                alert('日志文件位置:\\n' + userDataPath + '/directus.log');
+                alert('日志文件位置: ' + userDataPath + '/directus.log');
               }
             }
           </script>
@@ -689,14 +699,27 @@ app.on('before-quit', () => {
 EOF
 
           echo "✓ main.js created"
-          
-          # 创建一个简单的图标文件（如果不存在）
-          if [ ! -f "icon.ico" ]; then
-            echo "⚠️  icon.ico not found, you may need to add it manually"
-          fi
-          
+
           echo ""
           echo "✅ Electron app structure created successfully"
+
+      - name: Create default icon
+        shell: pwsh
+        run: |
+          Write-Host "=== Creating default icon ==="
+          # 在 Windows 上,我们可以使用 PowerShell 创建一个基本的 ICO 文件
+          # 或者从项目中复制,如果不存在则 electron-builder 使用默认图标
+
+          # 检查是否有图标文件在仓库中
+          if (Test-Path "icon.ico") {
+            Write-Host "✓ icon.ico already exists in repository"
+          } elseif (Test-Path "assets/icon.ico") {
+            Copy-Item "assets/icon.ico" "icon.ico"
+            Write-Host "✓ Copied icon.ico from assets/"
+          } else {
+            Write-Host "⚠️ No icon.ico found. Electron-builder will use default Electron icon."
+            Write-Host "   To use a custom icon, add icon.ico to the repository root or assets/ folder"
+          }
 
       - name: Verify directus-app before build
         shell: bash
