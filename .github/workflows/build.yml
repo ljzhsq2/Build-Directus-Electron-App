@@ -16,7 +16,50 @@ permissions:
   contents: write  # 允许创建 Release 和上传文件
 
 jobs:
+  extract-directus:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract Directus from Docker
+        run: |
+          echo "=== Extracting Directus from Docker ==="
+          docker pull directus/directus:11.5.1
+
+          docker create --name directus-temp directus/directus:11.5.1
+          mkdir -p directus-app-temp
+
+          # 提取文件（容忍符号链接错误）
+          docker cp directus-temp:/directus/. ./directus-app-temp/ || true
+          docker rm directus-temp
+
+          echo "=== Resolving Symlinks ==="
+          mkdir -p directus-app
+
+          # 使用 rsync 解析符号链接（Ubuntu 自带 rsync）
+          rsync -aL --ignore-errors directus-app-temp/ directus-app/ 2>/dev/null || {
+            echo "Some symlinks could not be resolved, continuing..."
+          }
+          rm -rf directus-app-temp
+
+          # 清理残留符号链接
+          find directus-app -type l -delete 2>/dev/null || true
+
+          echo "=== Packaging ==="
+          tar -czf directus-files.tar.gz directus-app
+
+          FILE_COUNT=$(find directus-app -type f | wc -l)
+          echo "✅ Packaged $FILE_COUNT files"
+          ls -lh directus-files.tar.gz
+
+      - name: Upload Directus files
+        uses: actions/upload-artifact@v4
+        with:
+          name: directus-files
+          path: directus-files.tar.gz
+          retention-days: 1
+
   build-windows:
+    needs: extract-directus
     runs-on: windows-latest
 
     steps:
@@ -28,52 +71,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Extract Directus from Docker
+      - name: Download Directus files
+        uses: actions/download-artifact@v4
+        with:
+          name: directus-files
+
+      - name: Extract Directus files
         shell: bash
         run: |
-          echo "=== Step 1: Pull and Extract Directus from Docker ==="
-          docker pull directus/directus:11.5.1
+          echo "=== Extracting Directus archive ==="
+          tar -xzf directus-files.tar.gz
 
-          # 创建临时容器并提取文件
-          docker create --name directus-temp directus/directus:11.5.1
-          mkdir -p directus-app-temp
-
-          # 提取文件（容忍符号链接错误）
-          docker cp directus-temp:/directus/. ./directus-app-temp/ || true
-          docker rm directus-temp
-
-          echo ""
-          echo "=== Step 2: Resolve Symlinks ==="
-
-          # 使用 tar 解析符号链接
-          mkdir -p directus-app
-          cd directus-app-temp
-          tar --dereference -cf - . 2>/dev/null | tar -xf - -C ../directus-app/ 2>/dev/null || {
-            echo "Some symlinks could not be resolved, continuing..."
-          }
-          cd ..
-          rm -rf directus-app-temp
-
-          # 清理残留符号链接
-          cd directus-app
-          find . -type l -print -delete 2>/dev/null || true
-          cd ..
-
-          echo ""
-          echo "=== Step 3: Verify Extracted Files ==="
           FILE_COUNT=$(find directus-app -type f | wc -l)
-          echo "✓ Extracted $FILE_COUNT files"
+          echo "✅ Extracted $FILE_COUNT files"
 
-          if [ -f "directus-app/cli.js" ]; then
-            echo "✓ Found: directus-app/cli.js"
-          elif [ -f "directus-app/dist/cli.js" ]; then
-            echo "✓ Found: directus-app/dist/cli.js"
+          # 验证关键文件
+          if [ -f "directus-app/cli.js" ] || [ -f "directus-app/dist/cli.js" ]; then
+            echo "✓ CLI found"
           else
-            echo "⚠️ Warning: CLI entry point not obvious, but continuing..."
+            echo "⚠️ Warning: CLI entry point not obvious"
           fi
-
-          echo ""
-          echo "✅ Directus files ready for packaging"
 
       - name: Copy Electron app files
         shell: bash
